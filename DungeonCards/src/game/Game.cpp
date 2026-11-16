@@ -633,6 +633,12 @@ void Game::updateBuild() {
 // ------------------------------------------------------------------- поход
 
 void Game::updateRun(float dt) {
+    if (!inRest_) {
+        inRest_ = true;
+        restStage_ = 0;
+        restActionDone_ = false;   // <-- сброс
+        std::fill(std::begin(restPick_), std::end(restPick_), false);
+    }
     if (IsKeyPressed(KEY_SPACE)) paused_ = !paused_;
     if (IsKeyPressed(KEY_UP) && speedIdx_ < 4) ++speedIdx_;
     if (IsKeyPressed(KEY_DOWN) && speedIdx_ > 0) --speedIdx_;
@@ -659,6 +665,7 @@ void Game::updateRun(float dt) {
         if (!inRest_) {
             inRest_ = true;
             restStage_ = 0;
+            restActionDone_ = false;   // <-- сброс защиты
             std::fill(std::begin(restPick_), std::end(restPick_), false);
         }
         updateRestChoice();
@@ -753,22 +760,37 @@ void Game::updateExplore(float dt) {
 }
 
 void Game::updateRestChoice() {
+    if (restActionDone_) return;
+
     Vector2 m = mouse();
     bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     const auto& hs = run_->party().heroes;
 
     if (restStage_ == 0) {
-        const int ax = kGridX + 30, bx = kGridX + 370, by = kGridY + 130, bw = 320, bh = 220;
-        if (IsKeyPressed(KEY_ONE) || (click && inRect(m, ax, by, bw, bh))) {
+        const int bw = 216, bh = 220, by = kGridY + 110, gap = 12;
+        const int xs[3] = {
+            kGridX + 16,
+            kGridX + 16 + bw + gap,
+            kGridX + 16 + 2 * (bw + gap),
+        };
+
+        if (IsKeyPressed(KEY_ONE) || (click && inRect(m, xs[0], by, bw, bh))) {
             run_->restHeal();
+            restActionDone_ = true;
             stepTimer_ = 0.f;
-        } else if (IsKeyPressed(KEY_TWO) || (click && inRect(m, bx, by, bw, bh))) {
+        } else if (IsKeyPressed(KEY_TWO) || (click && inRect(m, xs[1], by, bw, bh))) {
             restStage_ = 1;
             std::fill(std::begin(restPick_), std::end(restPick_), false);
+        } else if ((IsKeyPressed(KEY_THREE) || (click && inRect(m, xs[2], by, bw, bh)))
+                   && run_->canRestRevive()) {
+            run_->restRevive();
+            restActionDone_ = true;
+            stepTimer_ = 0.f;
         }
         return;
     }
 
+    // restStage_ == 1 — усиление
     const int req = std::min(Run::kBuffTargets, run_->party().aliveCount());
     const int keys[4] = {KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR};
     int picked = 0;
@@ -796,6 +818,7 @@ void Game::updateRestChoice() {
         for (int i = 0; i < static_cast<int>(hs.size()) && i < kMaxRoster; ++i)
             if (restPick_[i]) idx.push_back(i);
         run_->restBuff(idx);
+        restActionDone_ = true;
         stepTimer_ = 0.f;
     }
 }
@@ -1637,33 +1660,47 @@ void Game::drawRestOverlay() {
         drawTextCentered("ПРИВАЛ", cx, kGridY + 22.f, 36, kGood);
         drawTextCentered("Отряд отдыхает. Как использовать время?", cx, kGridY + 72.f, 18, kDim);
 
-        const int bw = 320, bh = 220, by = kGridY + 130;
-        const int xs[2] = {kGridX + 30, kGridX + 370};
-        const char* titles[2] = {"[1] Лечение группы", "[2] Усиление героев"};
-        const std::string descs[2] = {
+        const int bw = 216, bh = 220, by = kGridY + 110;
+        const int gap = 12;
+        const int xs[3] = {
+            kGridX + 16,
+            kGridX + 16 + bw + gap,
+            kGridX + 16 + 2 * (bw + gap),
+        };
+
+        const bool canRevive = run_->canRestRevive();
+        const char* titles[3] = {"[1] Лечение группы", "[2] Усиление героев", "[3] Воскрешение"};
+        const std::string descs[3] = {
             fmt("Все живые герои восстанавливают %d%% максимального здоровья.", Run::kRestHealPct),
-            fmt("Выбери двух героев: каждый получит +%d АТК и +%d ЗАЩ до конца похода.", Run::kBuffAtk, Run::kBuffDef)};
-        for (int k = 0; k < 2; ++k) {
-            bool hover = inRect(m, xs[k], by, bw, bh);
+            fmt("Выбери двух героев: каждый получит +%d АТК и +%d ЗАЩ до конца похода.", Run::kBuffAtk, Run::kBuffDef),
+            canRevive
+                ? fmt("Шанс %d%%: случайный павший герой встаёт с %d%% ЗДР. При неудаче привал тратится.",
+                    Run::kReviveChancePct, Run::kReviveHpPct)
+                : std::string("Нет павших героев — воскрешать некого."),
+        };
+        const Color titleCols[3] = {kHeal, kAccent, canRevive ? Color{190, 130, 235, 255} : kDim};
+
+        for (int k = 0; k < 3; ++k) {
+            const bool enabled = (k != 2) || canRevive;
+            const bool hover = enabled && inRect(m, xs[k], by, bw, bh);
             DrawRectangle(xs[k], by, bw, bh, hover ? Color{40, 48, 56, 255} : kPanel);
             DrawRectangleLines(xs[k], by, bw, bh, hover ? kAccent : kGridLine);
-            drawText(titles[k], static_cast<float>(xs[k] + 18), static_cast<float>(by + 18), 26, k == 0 ? kHeal : kAccent);
-            float ty = static_cast<float>(by + 66);
-            for (const auto& l : wrap(descs[k], bw - 36.f, 18)) {
-                drawText(l, static_cast<float>(xs[k] + 18), ty, 18, kText);
-                ty += 24;
+            drawText(titles[k], static_cast<float>(xs[k] + 12), static_cast<float>(by + 16), 18, titleCols[k]);
+            float ty = static_cast<float>(by + 56);
+            for (const auto& l : wrap(descs[k], bw - 24.f, 15)) {
+                drawText(l, static_cast<float>(xs[k] + 12), ty, 15, enabled ? kText : kDim);
+                ty += 19;
             }
         }
-
-        drawText("Состояние отряда", static_cast<float>(kGridX + 30), static_cast<float>(kGridY + 380), 16, kAccent);
-        for (int i = 0; i < static_cast<int>(hs.size()) && i < 4; ++i) {
-            const Hero& h = hs[i];
-            const int hx = kGridX + 30 + i * 172;
-            drawText(h.name, static_cast<float>(hx), static_cast<float>(kGridY + 406), 16, h.alive() ? kText : kDim);
-            drawBar(hx, kGridY + 430, 150, 9, h.maxHp ? static_cast<float>(h.hp) / h.maxHp : 0.f, kGood);
-            drawText(fmt("%d/%d", std::max(0, h.hp), h.maxHp), static_cast<float>(hx), static_cast<float>(kGridY + 444), 14, kDim);
-        }
-        return;
+            drawText("Состояние отряда", static_cast<float>(kGridX + 30), static_cast<float>(kGridY + 380), 16, kAccent);
+            for (int i = 0; i < static_cast<int>(hs.size()) && i < 4; ++i) {
+                const Hero& h = hs[i];
+                const int hx = kGridX + 30 + i * 172;
+                drawText(h.name, static_cast<float>(hx), static_cast<float>(kGridY + 406), 16, h.alive() ? kText : kDim);
+                drawBar(hx, kGridY + 430, 150, 9, h.maxHp ? static_cast<float>(h.hp) / h.maxHp : 0.f, kGood);
+                drawText(fmt("%d/%d", std::max(0, h.hp), h.maxHp), static_cast<float>(hx), static_cast<float>(kGridY + 444), 14, kDim);
+            }
+            return;
     }
 
     const int req = std::min(Run::kBuffTargets, run_->party().aliveCount());
