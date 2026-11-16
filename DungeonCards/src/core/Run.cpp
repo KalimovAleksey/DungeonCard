@@ -241,25 +241,23 @@ bool Run::canRestRevive() const {
 void Run::restRevive() {
     if (phase_ != RunPhase::RestChoice) return;
 
-    // Собираем павших
     std::vector<int> dead;
-    for (int i = 0; i < static_cast<int>(party_.heroes.size()); ++i)
+    for (int i = 0; i < (int)party_.heroes.size(); ++i)
         if (!party_.heroes[i].alive()) dead.push_back(i);
-    if (dead.empty()) return;  // нечего воскрешать — остаёмся на привале
+    if (dead.empty()) return;      // <-- если павших нет, phase_ НЕ меняется — это ок, привал не тратится
 
     ++cleared_;
-    const int pick = dead[rng_.range(0, static_cast<int>(dead.size()) - 1)];
+    const int pick = dead[rng_.range(0, (int)dead.size() - 1)];
     Hero& h = party_.heroes[pick];
 
     if (rng_.range(1, 100) <= kReviveChancePct) {
         h.hp = std::max(1, h.maxHp * kReviveHpPct / 100);
-        h.away = false;  // на случай, если герой был проглочен
-        say(fmt("Привал: чудо! %s возвращается в строй (%d%% ЗДР).",
-                h.name.c_str(), kReviveHpPct));
+        h.away = false;
+        say(fmt("Привал: чудо! %s возвращается в строй (%d%% ЗДР).", h.name.c_str(), kReviveHpPct));
     } else {
         say(fmt("Привал: попытка воскресить %s не удалась.", h.name.c_str()));
     }
-    phase_ = RunPhase::Exploring;
+    phase_ = RunPhase::Exploring;   // <-- ВСЕГДА, вне if/else
 }
 
 }  // namespace dc
