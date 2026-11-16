@@ -29,6 +29,7 @@ public:
     void run();
 
 private:
+    bool restActionDone_ = false;   
     enum class Screen { MainMenu, Select, Build, Run, Result, Pause, Settings };
     struct Settings {
         int width = 1280;
