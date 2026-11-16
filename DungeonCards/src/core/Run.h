@@ -22,7 +22,7 @@ public:
     static constexpr int kBuffDef = 1;
     static constexpr int kBuffTargets = 2;
 
-    static constexpr int kReviveChancePct = 100;  // шанс успеха
+    static constexpr int kReviveChancePct = 50;  // шанс успеха
     static constexpr int kReviveHpPct = 30;      // доля макс. HP при успехе
 
     bool canRestRevive() const;  // есть ли павший герой
