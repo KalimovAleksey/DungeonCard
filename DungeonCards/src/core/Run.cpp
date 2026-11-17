@@ -98,6 +98,13 @@ void Run::step() {
     for (const auto& a : combat_->events())
         for (const auto& h : a.hits)
             if (!h.targetHero && !h.heal) gained += h.coins;
+            
+    // --- НОВОЕ: Пассивка Лучника ---
+    if (gained > 0 && hasLivingArcher()) {
+        int bonus = gained * kArcherCoinBonusPct / 100;
+        gained += bonus;
+    }
+    // -------------------------------
     if (gained > 0) {
         party_.coins += gained;
         say(fmt("Монеты: +%d (всего %d)", gained, party_.coins));
@@ -254,6 +261,14 @@ int Run::restHealPct() const {
     }
     return kRestHealPct;
 } // <--- Не забудьте закрыть метод!
+bool Run::hasLivingArcher() const {
+    for (const auto& h : party_.heroes) {
+        if (h.alive() && h.role == Role::Archer) {
+            return true;
+        }
+    }
+    return false;
+}
 
 void Run::restRevive() {
     if (phase_ != RunPhase::RestChoice) return;

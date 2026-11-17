@@ -1437,6 +1437,11 @@ void Game::drawSelect() {
             drawText(l, static_cast<float>(x + 20), ay, 15, kText);
             ay += 18;
         }
+        if (h.role == Role::Archer) {
+            drawText(fmt("★ Пассивка: +%d%% монет с врагов", Run::kArcherCoinBonusPct),
+                     static_cast<float>(x + 20), ay, 14, kGood);
+            ay += 18;
+        }
         if (ch) drawText("ВЫБРАН", x + kSelCardW - 92.f, y + 40.f, 16, kGood);
     }
 

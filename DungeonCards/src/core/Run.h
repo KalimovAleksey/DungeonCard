@@ -26,11 +26,14 @@ public:
     static constexpr int kReviveChancePct = 25;  // шанс успеха
     static constexpr int kReviveChanceClericPct = 50; // шанс успеха с жрицей
     static constexpr int kReviveHpPct = 30;      // доля макс. HP при успехе
+    static constexpr int kArcherCoinBonusPct = 25; // +25% монет, если жив Лучник
 
     bool canRestRevive() const;  // есть ли павший герой
     void restRevive(); 
     int reviveChancePct() const; 
     int restHealPct() const;   // 20% или 40%, если в отряде есть живой Паладин
+    bool hasLivingArcher() const; // проверяет, есть ли в отряде живой Лучник
+    
 
     Run(const Dungeon& dungeon, uint32_t seed, std::vector<Hero> heroes = {});
     Run(const Run&) = delete;
