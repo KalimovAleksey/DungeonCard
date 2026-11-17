@@ -69,6 +69,7 @@ public:
     explicit Party(std::vector<Hero> heroes);
 
     bool anyAlive() const;
+    bool hasLivingMage() const;
     int aliveCount() const;
     int totalHp() const;
     int totalMaxHp() const;

@@ -21,7 +21,7 @@ const char* roleTitle(Role r) {
 const char* roleAbility(Role r) {
     switch (r) {
         case Role::Warrior:   return "Провокация: враги чаще целятся в него. Надёжная опора отряда.";
-        case Role::Mage:      return "Магия: игнорирует половину защиты врага.";
+        case Role::Mage:      return "Магия: игнорирует половину защиты врага. Пассивно: зелья лечат на 50% сильнее.";
         case Role::Cleric:    return "Исцеление: лечит самого раненого союзника (АТК+3). Пассивно: шанс воскрешения на привале +25% (до 50%).";
         case Role::Rogue:     return "Критический удар: 25% шанс удвоить урон. Обезвреживает ловушки.";
         case Role::Archer:    return "Залп: каждая атака бьёт двух врагов с 80% урона. Пассивно: +25% монет с врагов, пока жив.";
@@ -247,6 +247,10 @@ bool Party::takeBestPotion(int& power) {
         if (bag[i].kind == ItemKind::Potion && (best < 0 || bag[i].power > bag[best].power)) best = i;
     if (best < 0) return false;
     power = bag[best].power;
+    // --- ИЗМЕНЕНИЕ: Увеличиваем силу лечения, если есть Маг ---
+    if (hasLivingMage()) {
+        power = power * 150 / 100;
+    }
     bag.erase(bag.begin() + best);
     return true;
 }
@@ -281,9 +285,19 @@ bool Party::usePotion(int bagIndex, int heroIndex) {
     if (heroIndex < 0 || heroIndex >= static_cast<int>(heroes.size())) return false;
     Hero& h = heroes[heroIndex];
     if (bag[bagIndex].kind != ItemKind::Potion || !h.alive() || h.hp >= h.maxHp) return false;
+    // --- ИЗМЕНЕНИЕ: Увеличиваем силу лечения, если есть Маг ---
+    int healPower = bag[bagIndex].power;
+    if (hasLivingMage()) {
+        healPower = healPower * 150 / 100; // +50%
+    }
     h.hp = std::min(h.maxHp, h.hp + bag[bagIndex].power);
     bag.erase(bag.begin() + bagIndex);
     return true;
 }
-
+bool Party::hasLivingMage() const {
+    for (const auto& h : heroes) {
+        if (h.alive() && h.role == Role::Mage) return true;
+    }
+    return false;
+}
 }  // namespace dc
