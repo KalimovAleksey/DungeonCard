@@ -1675,7 +1675,7 @@ void Game::drawRestOverlay() {
             fmt("Выбери двух героев: каждый получит +%d АТК и +%d ЗАЩ до конца похода.", Run::kBuffAtk, Run::kBuffDef),
             canRevive
                 ? fmt("Шанс %d%%: случайный павший герой встаёт с %d%% ЗДР. При неудаче привал тратится.",
-                    Run::kReviveChancePct, Run::kReviveHpPct)
+                    run_->reviveChancePct(), Run::kReviveHpPct)
                 : std::string("Нет павших героев — воскрешать некого."),
         };
         const Color titleCols[3] = {kHeal, kAccent, canRevive ? Color{190, 130, 235, 255} : kDim};
