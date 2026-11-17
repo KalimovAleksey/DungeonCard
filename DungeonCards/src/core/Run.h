@@ -33,6 +33,7 @@ public:
     int reviveChancePct() const; 
     int restHealPct() const;   // 20% или 40%, если в отряде есть живой Паладин
     bool hasLivingArcher() const; // проверяет, есть ли в отряде живой Лучник
+    bool hasLivingBard() const;
     
 
     Run(const Dungeon& dungeon, uint32_t seed, std::vector<Hero> heroes = {});

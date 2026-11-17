@@ -358,7 +358,7 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
         if (dead) killed.push_back(ei);
     };
 
-    switch (h.role) {
+        switch (h.role) {
         case Role::Mage:
             act.kind = CombatAction::Ranged;
             hit(order[0], h.atk, true, true);
@@ -371,6 +371,26 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
             bool rage = h.hp * 2 < h.maxHp;
             act.kind = CombatAction::Melee;
             hit(order[0], h.atk * (rage ? 3 : 2) / 2, false, false);
+            break;
+        }
+        case Role::Bard: {
+            // Бард ищет лучшего бойца (с максимальным АТК) и дает ему бафф
+            int bestAlly = -1;
+            for (int j = 0; j < (int)party_.heroes.size(); ++j) {
+                if (j == i || !party_.heroes[j].inFight()) continue;
+                if (bestAlly < 0 || party_.heroes[j].atk > party_.heroes[bestAlly].atk) bestAlly = j;
+            }
+            if (bestAlly >= 0) {
+                int bonusAtk = h.atk / 2; // Половина от АТК Барда
+                party_.heroes[bestAlly].buffAtk += bonusAtk;
+                party_.heroes[bestAlly].recalc();
+                
+                act.kind = CombatAction::Effect;
+                act.hits.push_back({true, bestAlly, bonusAtk, true, false, false}); // Используем heal для отрисовки "+X"
+                events_.push_back(act);
+                log.push_back(fmt("%s вдохновляет %s: +%d АТК!", h.name.c_str(), party_.heroes[bestAlly].name.c_str(), bonusAtk));
+                return;
+            }
             break;
         }
         default:

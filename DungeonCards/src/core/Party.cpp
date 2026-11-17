@@ -14,6 +14,7 @@ const char* roleTitle(Role r) {
         case Role::Paladin:   return "Защитник-целитель";
         case Role::Berserker: return "Яростный боец";
         case Role::Druid:     return "Лекарь группы";
+        case Role::Bard:      return "Вдохновитель";
     }
     return "";
 }
@@ -28,6 +29,7 @@ const char* roleAbility(Role r) {
         case Role::Paladin:   return "Провокация: после атаки лечит раненого на 2. Пассивно: привал лечит на 40% вместо 20%.";
         case Role::Berserker: return "Ярость: +50% урона, когда здоровье ниже половины.";
         case Role::Druid:     return "Целебный дождь: если кто-то ранен, лечит всех союзников на 2.";
+        case Role::Bard:      return "Вдохновение: усиливает союзника на половину своей АТК. Пассивно: скидка у торговца 15%.";
     }
     return "";
 }
@@ -100,6 +102,7 @@ std::vector<Hero> heroRoster() {
         makeHero("Паладин", Role::Paladin,   38, 6, 4, 3),
         makeHero("Берсерк", Role::Berserker, 34, 10, 1, 5),
         makeHero("Друид",   Role::Druid,     27, 4, 1, 4),
+        makeHero("Бард",    Role::Bard, 29, 6, 2, 4),
     };
 }
 

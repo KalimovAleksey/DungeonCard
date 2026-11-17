@@ -74,7 +74,7 @@ private:
         bool heal = false;
     };
 
-    static constexpr int kMaxRoster = 8;
+    static constexpr int kMaxRoster = 9;
     static constexpr int kPartySize = 4;
     static constexpr int kHand = 4;
     static constexpr int kMaxPlacements = 12;
@@ -189,7 +189,14 @@ private:
     Dungeon dungeon_;
     std::unique_ptr<Run> run_;
     Slot hand_[kHand];
+    
     int selected_ = 0;
+    // Прокрутка экрана выбора героев
+    float selScroll_ = 0.f;      // текущее смещение
+    float selScrollTarget_ = 0.f;// целевое (для плавной анимации)
+    float selContentH_ = 0.f;    // общая высота всех карточек
+    float selViewH_ = 0.f;       // высота видимой области (сетки)
+
     int placementsLeft_ = 0;
     int discardsLeft_ = 0;
     std::string message_;

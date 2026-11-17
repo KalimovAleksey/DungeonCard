@@ -6,7 +6,7 @@
 
 namespace dc {
 
-enum class Role { Warrior, Mage, Cleric, Rogue, Archer, Paladin, Berserker, Druid };
+enum class Role { Warrior, Mage, Cleric, Rogue, Archer, Paladin, Berserker, Druid, Bard };
 
 inline bool isHealer(Role r) { return r == Role::Cleric || r == Role::Druid; }
 inline bool isTank(Role r) { return r == Role::Warrior || r == Role::Paladin; }

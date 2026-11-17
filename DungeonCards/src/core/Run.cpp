@@ -224,6 +224,11 @@ bool Run::buy(int idx) {
     auto it = stocks_.find(pos_);
     if (it == stocks_.end() || idx < 0 || idx >= static_cast<int>(it->second.size())) return false;
     ShopOffer& o = it->second[idx];
+    // --- НОВОЕ: Скидка Барда ---
+    int finalPrice = o.price;
+    if (hasLivingBard()) {
+        finalPrice = finalPrice * 85 / 100; // 15% скидка
+    }
     if (o.sold || party_.coins < o.price) return false;
     party_.coins -= o.price;
     o.sold = true;
@@ -266,6 +271,12 @@ bool Run::hasLivingArcher() const {
         if (h.alive() && h.role == Role::Archer) {
             return true;
         }
+    }
+    return false;
+}
+bool Run::hasLivingBard() const {
+    for (const auto& h : party_.heroes) {
+        if (h.alive() && h.role == Role::Bard) return true;
     }
     return false;
 }

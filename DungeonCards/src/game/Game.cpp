@@ -75,6 +75,7 @@ Color roleColor(Role r) {
         case Role::Paladin:   return {225, 185, 70, 255};
         case Role::Berserker: return {215, 85, 65, 255};
         case Role::Druid:     return {80, 185, 115, 255};
+        case Role::Bard:      return {255, 105, 180, 255};
     }
     return kDim;
 }
@@ -212,8 +213,14 @@ Game::Game() {
     roster_ = heroRoster();
     for (int i = 0; i < kPartySize && i < kMaxRoster; ++i) chosen_[i] = true;
     rollRun();
+    
+    // Вычисляем высоты сразу при старте, чтобы скроллбар работал с первого кадра
+    const int totalRows = (static_cast<int>(roster_.size()) + 3) / 4;  // 3 ряда для 9 героев
+    selContentH_ = static_cast<float>(totalRows * (kSelCardH + kSelGap)); // 3 * 262 = 786
+    selViewH_ = 590.f - kSelY; // 600 - 90 = 510
+
     screen_ = Screen::MainMenu;
-}
+} // <-- ВОТ ЭТА СКОБКА ПРОПУЩЕНА! Без неё следующий код (Game::~Game) попадает внутрь конструктора
 
 Game::~Game() {
     if (ownFont_) UnloadFont(font_);
@@ -465,6 +472,8 @@ void Game::updateMainMenu() {
         rollRun();
         setMessage("Выбери четырёх героев и босса для похода.", false);
         screen_ = Screen::Select;
+        selScroll_ = 0.f;
+        selScrollTarget_ = 0.f;
     } else if (pick == 1) {
         settingsBack_ = Screen::MainMenu;
         screen_ = Screen::Settings;
@@ -519,17 +528,37 @@ void Game::updateSelect() {
         if (IsKeyPressed(KEY_ENTER)) showBossCard_ = false;
         return;
     }
+    
+
+    float wheel = GetMouseWheelMove();
+    if (wheel != 0.f) {
+        selScrollTarget_ -= wheel * 40.f; // Скорость прокрутки
+    
+    }
+    if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_PAGE_DOWN)) selScrollTarget_ += 60.f;
+    if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_PAGE_UP)) selScrollTarget_ -= 60.f;
+
+    // Ограничиваем прокрутку
+    float maxScroll = std::max(0.f, selContentH_ - selViewH_);
+    selScrollTarget_ = std::max(0.f, std::min(selScrollTarget_, maxScroll));
+    
+    // Плавная интерполяция
+    selScroll_ += (selScrollTarget_ - selScroll_) * 15.f * GetFrameTime();
+    if (std::abs(selScroll_ - selScrollTarget_) < 0.5f) selScroll_ = selScrollTarget_;
+    // ---------------------------------
+
     // босс из трёх: Q / W / E или клик по плитке (повторный клик - подробности)
     if (IsKeyPressed(KEY_Q)) bossPick_ = 0;
     if (IsKeyPressed(KEY_W)) bossPick_ = 1;
     if (IsKeyPressed(KEY_E)) bossPick_ = 2;
 
-    const int keys[kMaxRoster] = {KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR, KEY_FIVE, KEY_SIX, KEY_SEVEN, KEY_EIGHT};
+    const int keys[kMaxRoster] = {KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR, KEY_FIVE, KEY_SIX, KEY_SEVEN, KEY_EIGHT, KEY_NINE};
     Vector2 m = mouse();
     bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     for (int i = 0; i < static_cast<int>(roster_.size()) && i < kMaxRoster; ++i) {
         int x = kSelX + (i % 4) * (kSelCardW + kSelGap);
-        int y = kSelY + (i / 4) * (kSelCardH + kSelGap);
+        int y = static_cast<int>(kSelY + (i / 4) * (kSelCardH + kSelGap) - selScroll_);
+        
         bool toggle = IsKeyPressed(keys[i]) || (click && inRect(m, x, y, kSelCardW, kSelCardH));
         if (!toggle) continue;
         if (chosen_[i]) {
@@ -1390,6 +1419,7 @@ void Game::drawBossIntro() {
 // ----------------------------------------------------------- выбор героев
 
 void Game::drawSelect() {
+
     drawText("ВЫБОР ОТРЯДА", kSelX, 20, 32, kAccent);
     drawText("Выбери четырёх героев (клик или 1-8) и одного из трёх боссов (Q/W/E). Enter - начать. Состав решает исход боя!",
              kSelX, 60, 16, kDim);
@@ -1404,7 +1434,10 @@ void Game::drawSelect() {
     for (int i = 0; i < static_cast<int>(roster_.size()) && i < kMaxRoster; ++i) {
         const Hero& h = roster_[i];
         const int x = kSelX + (i % 4) * (kSelCardW + kSelGap);
-        const int y = kSelY + (i / 4) * (kSelCardH + kSelGap);
+        const int y = static_cast<int>(kSelY + (i / 4) * (kSelCardH + kSelGap) - selScroll_);
+        
+        // ЖЕСТКАЯ ОБРЕЗКА: карточка рисуется только внутри окна (90..595)
+        if (y + kSelCardH < kSelY || y > kSelY + selViewH_) continue;
         const bool hover = inRect(m, x, y, kSelCardW, kSelCardH) && !showBossCard_;
         const bool ch = chosen_[i];
         const Color rc = roleColor(h.role);
@@ -1475,6 +1508,27 @@ void Game::drawSelect() {
         DrawRectangle(0, 0, kScreenW, kScreenH, {0, 0, 0, 190});
         drawBossCard(190, 50, 900, 560, bossId_);
         drawTextCentered("B / Enter - закрыть", kScreenW / 2.f, 624.f, 18, kAccent);
+    }
+    if (selContentH_ > selViewH_) {
+        // Прижимаем скроллбар к правому краю карточек (x = 1260)
+        const int trackX = kSelX + 4 * (kSelCardW + kSelGap) - 30; // 1235
+        const int trackY = kSelY;
+        const int trackH = static_cast<int>(selViewH_);
+        const int trackW = 16;
+
+        // Фон дорожки
+        DrawRectangle(trackX, trackY, trackW, trackH, {30, 32, 42, 200});
+
+        // Размер ползунка пропорционален видимой части
+        float ratio = selViewH_ / selContentH_;
+        int thumbH = std::max(30, static_cast<int>(trackH * ratio));
+        
+        // Позиция ползунка
+        float scrollRatio = selScroll_ / std::max(1.f, selContentH_ - selViewH_);
+        int thumbY = trackY + static_cast<int>((trackH - thumbH) * scrollRatio);
+
+        // Ползунок
+        DrawRectangle(trackX, thumbY, trackW, thumbH, kAccent);
     }
 }
 
@@ -1838,7 +1892,18 @@ void Game::drawShop() {
                 drawText("ПРОДАНО", r.x + r.w - 110.f, r.y + 22.f, 20, kDim);
             } else {
                 drawCoin(r.x + r.w - 118.f, r.y + 34.f, 10.f);
-                drawText(fmt("%d", o.price), r.x + r.w - 100.f, r.y + 20.f, 26, afford ? kGood : kBad);
+                // --- НОВОЕ: Показываем реальную цену со скидкой ---
+                int finalPrice = o.price;
+                if (run_->hasLivingBard()) finalPrice = finalPrice * 85 / 100;
+                
+                // Если есть скидка, зачеркиваем старую цену и пишем новую
+                if (run_->hasLivingBard()) {
+                    drawText(fmt("%d", o.price), r.x + r.w - 100.f, r.y + 20.f, 16, kDim);
+                    DrawLine(r.x + r.w - 100.f, r.y + 33.f, r.x + r.w - 60.f, r.y + 33.f, kBad);
+                    drawText(fmt("%d", finalPrice), r.x + r.w - 56.f, r.y + 20.f, 26, afford ? kGood : kBad);
+                } else {
+                    drawText(fmt("%d", finalPrice), r.x + r.w - 100.f, r.y + 20.f, 26, afford ? kGood : kBad);
+                }
             }
         }
     }
