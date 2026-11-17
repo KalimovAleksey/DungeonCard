@@ -1671,7 +1671,7 @@ void Game::drawRestOverlay() {
         const bool canRevive = run_->canRestRevive();
         const char* titles[3] = {"[1] Лечение группы", "[2] Усиление героев", "[3] Воскрешение"};
         const std::string descs[3] = {
-            fmt("Все живые герои восстанавливают %d%% максимального здоровья.", Run::kRestHealPct),
+            fmt("Все живые герои восстанавливают %d%% максимального здоровья.", run_->restHealPct()),
             fmt("Выбери двух героев: каждый получит +%d АТК и +%d ЗАЩ до конца похода.", Run::kBuffAtk, Run::kBuffDef),
             canRevive
                 ? fmt("Шанс %d%%: случайный павший герой встаёт с %d%% ЗДР. При неудаче привал тратится.",
