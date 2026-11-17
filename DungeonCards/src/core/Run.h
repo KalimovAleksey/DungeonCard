@@ -22,11 +22,13 @@ public:
     static constexpr int kBuffDef = 1;
     static constexpr int kBuffTargets = 2;
 
-    static constexpr int kReviveChancePct = 50;  // шанс успеха
+    static constexpr int kReviveChancePct = 25;  // шанс успеха
+    static constexpr int kReviveChanceClericPct = 50; // шанс успеха с жрицей
     static constexpr int kReviveHpPct = 30;      // доля макс. HP при успехе
 
     bool canRestRevive() const;  // есть ли павший герой
     void restRevive(); 
+    int reviveChancePct() const; 
 
     Run(const Dungeon& dungeon, uint32_t seed, std::vector<Hero> heroes = {});
     Run(const Run&) = delete;
@@ -76,6 +78,7 @@ private:
     void onFightWon();
     void resolveTrap(int difficulty);
     void giveLoot(int tier);
+    // 25% или 50%, если в отряде есть живая Жрица
 
     Dungeon dungeon_;
     Party party_;
