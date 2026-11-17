@@ -17,7 +17,8 @@ enum class RunPhase { Exploring, Fighting, RestChoice, BossIntro, Shop, Victory,
 
 class Run {
 public:
-    static constexpr int kRestHealPct = 40;  // лечение на привале
+    static constexpr int kRestHealPct = 20;        // базовое лечение на привале
+    static constexpr int kRestHealPaladinPct = 40; // с Паладином в отряде
     static constexpr int kBuffAtk = 3;       // бафф на привале
     static constexpr int kBuffDef = 1;
     static constexpr int kBuffTargets = 2;
@@ -29,6 +30,7 @@ public:
     bool canRestRevive() const;  // есть ли павший герой
     void restRevive(); 
     int reviveChancePct() const; 
+    int restHealPct() const;   // 20% или 40%, если в отряде есть живой Паладин
 
     Run(const Dungeon& dungeon, uint32_t seed, std::vector<Hero> heroes = {});
     Run(const Run&) = delete;
