@@ -115,6 +115,7 @@ private:
     void updateRestChoice();
     void updateInventory();
     void updateShop();
+    void updateForge();
     void onRunStep();
     void spawnActions();
     void updateAnims(float dt);
@@ -130,6 +131,7 @@ private:
     void drawRestOverlay();
     void drawInventory();
     void drawShop();
+    void drawForge(); 
     void drawBossCard(int x, int y, int w, int h, int bossId) const;
     void drawBossIntro();
     void drawResult();
