@@ -12,6 +12,7 @@ const char* roleKey(Role r) {
         case Role::Paladin:   return "paladin";
         case Role::Berserker: return "berserker";
         case Role::Druid:     return "druid";
+        case Role::Bard:      return "bard";
     }
     return "hero";
 }

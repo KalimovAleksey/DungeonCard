@@ -6,7 +6,7 @@
 
 namespace dc {
 
-enum class Role { Warrior, Mage, Cleric, Rogue, Archer, Paladin, Berserker, Druid };
+enum class Role { Warrior, Mage, Cleric, Rogue, Archer, Paladin, Berserker, Druid, Bard };
 
 inline bool isHealer(Role r) { return r == Role::Cleric || r == Role::Druid; }
 inline bool isTank(Role r) { return r == Role::Warrior || r == Role::Paladin; }
@@ -28,6 +28,7 @@ struct Item {
 Item rollLoot(Rng& rng, int tier);
 Item makePotion(int tier);                   // зелье заданного уровня (без случайности)
 std::string itemBonusText(const Item& it);   // короткое описание эффекта
+Item upgradeItem(const Item& it);
 const char* itemKindName(ItemKind k);
 
 struct Hero {
@@ -41,6 +42,7 @@ struct Hero {
     int baseHp = 1, baseAtk = 1, baseDef = 0, baseSpd = 1;
     int metaCritPct = 0;   // шанс крита от «Наследия»
     int buffAtk = 0, buffDef = 0;  // баффы с привала
+    int buffAtkCombat = 0;
     bool away = false;             // проглочен боссом: не участвует в бою
     std::optional<Item> weapon, armor, relic;
 
@@ -76,7 +78,9 @@ public:
     int totalMaxHp() const;
     void healPercent(int pct);
     void buff(int index, int atk, int def);
+    void clearCombatBuffs();
     Hero* findAlive(Role r);
+    const Hero* findAlive(Role r) const;
 
     // --- рюкзак ---
     int potionCount() const;

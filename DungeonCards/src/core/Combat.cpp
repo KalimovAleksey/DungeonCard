@@ -14,7 +14,7 @@ int calcDmg(int atk, int def) { return std::max(minDmg(atk), atk - def); }
 
 // ---------------------------------------------------------------- враги
 
-std::vector<Enemy> makeEnemies(int d, Rng& rng, int floor) {
+std::vector<Enemy> makeEnemies(int d, Rng& rng, int coinBonusPct) {
     d = std::max(1, std::min(3, d));
     static const char* names[3][3] = {
         {"Гоблин", "Крыса", "Скелет"},
@@ -32,15 +32,12 @@ std::vector<Enemy> makeEnemies(int d, Rng& rng, int floor) {
     const int pick = rng.range(0, 2);
     std::string base = names[d - 1][pick];
     std::vector<Enemy> out;
-    const int hpBonus = (floor - 1) * 20; // +20 HP за этаж
-    const int atkBonus = (floor - 1) * 2; // +2 ATK за этаж
-
     for (int i = 0; i < s.count; ++i) {
         Enemy e;
         e.name = base + " " + std::to_string(i + 1);
-        e.maxHp = e.hp = (s.hp + rng.range(-2, 2)) + hpBonus;
-        e.atk = s.atk + atkBonus;
-        e.def = s.def + (floor - 1); // +1 DEF за этаж
+        e.maxHp = e.hp = s.hp + rng.range(-2, 2);
+        e.atk = s.atk;
+        e.def = s.def;
         e.spd = s.spd;
         e.slot = i;
         e.coins = rng.range(s.coinMin, s.coinMax) * (100 + std::max(0, coinBonusPct)) / 100;
@@ -50,13 +47,13 @@ std::vector<Enemy> makeEnemies(int d, Rng& rng, int floor) {
     return out;
 }
 
-Enemy makeBoss(int id, int floor) {
+Enemy makeBoss(int id) {
     const BossInfo& info = bossInfo(id);
     Enemy e;
     e.name = info.name;
-    e.maxHp = e.hp = info.hp + (floor - 1) * 100; // Боссы жирнеют
-    e.atk = info.atk + (floor - 1) * 5;
-    e.def = info.def + (floor - 1) * 2;
+    e.maxHp = e.hp = info.hp;
+    e.atk = info.atk;
+    e.def = info.def;
     e.spd = info.spd;
     e.bossId = id;
     e.boss = true;
@@ -375,16 +372,32 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
             break;
         case Role::Archer:
             act.kind = CombatAction::Ranged;
-            if (order.size() == 1) {
-                hit(order[0], h.atk, false, true);  // единственная цель: один выстрел, полный урон
-            } else {
-                for (size_t k = 0; k < 2; ++k) hit(order[k], h.atk * 8 / 10, false, true);  // залп по двум: 80%
-            }
+            for (size_t k = 0; k < order.size() && k < 2; ++k)
+                hit(order[k], order.size() == 1 ? h.atk : h.atk * 8 / 10, false, true);
             break;
         case Role::Berserker: {
             bool rage = h.hp * 2 < h.maxHp;
             act.kind = CombatAction::Melee;
             hit(order[0], h.atk * (rage ? 3 : 2) / 2, false, false);
+            break;
+        }
+        case Role::Bard: {
+            int best = -1;
+            for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j) {
+                if (j == i || !party_.heroes[j].inFight()) continue;
+                if (best < 0 || party_.heroes[j].atk > party_.heroes[best].atk) best = j;
+            }
+            if (best >= 0) {
+                const int bonus = std::max(1, h.atk / 2);
+                party_.heroes[best].buffAtkCombat += bonus;
+                party_.heroes[best].recalc();
+                act.kind = CombatAction::Effect;
+                act.hits.push_back({true, best, bonus, true, false, false});
+                events_.push_back(act);
+                log.push_back(fmt("%s вдохновляет %s: +%d АТК!", h.name.c_str(), party_.heroes[best].name.c_str(), bonus));
+                return;
+            }
+            act.kind = CombatAction::Effect;
             break;
         }
         default:

@@ -15,7 +15,7 @@ namespace dc {
 // Exploring: игрок ходит по комнатам (WASD) и управляет инвентарём.
 // Fighting: автобой. RestChoice: привал, ждём решения. BossIntro: показана карточка босса.
 // Shop: отряд у торговца (покупка за монеты).
-enum class RunPhase { Exploring, Fighting, RestChoice, BossIntro, Shop, Victory, Defeat };
+enum class RunPhase { Exploring, Fighting, RestChoice, BossIntro, Shop, ForgeChoice, Victory, Defeat };
 
 // Что приносит в забег постоянный профиль: улучшения «Наследия» и доступные артефакты.
 // Улучшения героев (ЗДР/АТК/ЗАЩ) применяются к героям ДО создания Run (Meta::applyToHero).
@@ -26,10 +26,8 @@ struct RunOptions {
 
 class Run {
 public:
-    Run(const Dungeon& dungeon, uint32_t seed, Party party, int floor = 1);
-    static constexpr int kRestHealPct = 20;        // базовое лечение на привале
-    static constexpr int kRestHealPaladinPct = 40; // с Паладином в отряде
-    static constexpr int kBuffAtk = 3;             // бафф на привале
+    static constexpr int kRestHealPct = kBaseRestHealPct;  // лечение на привале (без улучшений)
+    static constexpr int kBuffAtk = 3;       // бафф на привале
     static constexpr int kBuffDef = 1;
     static constexpr int kBuffTargets = 2;
     static constexpr int kReviveCost = kBaseReviveCost;    // воскрешение за монеты (без улучшений)
@@ -38,6 +36,7 @@ public:
     static constexpr int kRevivePct = 50;    // сколько здоровья у воскрешённого
 
     Run(const Dungeon& dungeon, uint32_t seed, std::vector<Hero> heroes = {}, RunOptions options = {});
+    Run(const Dungeon& dungeon, uint32_t seed, Party party, int floor, RunOptions options = {});
     Run(const Run&) = delete;
     Run& operator=(const Run&) = delete;
 
@@ -50,9 +49,14 @@ public:
     // --- привал ---
     void restHeal();
     void restBuff(const std::vector<int>& heroIndexes);
+    bool canRestRevive() const;
+    int reviveChancePct() const;
+    void restReviveRandom();
+    int restHealPct() const;
+    bool hasLivingArcher() const;
+    bool hasLivingBard() const;
     bool restRevive(int heroIndex);           // за монеты; привал продолжается
     bool restReviveArtifact(int heroIndex);   // за артефакт (постоянная валюта), здоровья больше
-    int restHealPct() const { return meta_.restHealPct(); }
     int reviveCoinCost() const { return meta_.reviveCoinCost(); }
     int artifacts() const { return artifacts_; }    // артефакты, оставшиеся у игрока
     const Meta& meta() const { return meta_; }
@@ -63,6 +67,9 @@ public:
     bool openShop();                                  // открыть торговлю (если стоим у торговца)
     bool buy(int offerIndex);                         // купить лот: монеты -> предмет в рюкзак
     void leaveShop();
+    bool forgeUpgrade(int bagIndex);
+    int forgePrice(const Item& it) const;
+    void leaveForge();
     const std::vector<ShopOffer>* shopStock() const;  // лоты текущего торговца или nullptr
     void grantCoins(int n) { party_.coins += n; }     // для тестов и отладки
     // --- инвентарь (доступен вне боя, у торговца и на карточке босса) ---
@@ -86,8 +93,8 @@ public:
     const std::vector<Item>& loot() const { return loot_; }
     int roomsCleared() const { return cleared_; }
     int floor() const { return floor_; }
+
 private:
-    int floor_ = 1;
     void say(const std::string& s);
     void enterRoom(Vec2i p);
     void startFight(std::vector<Enemy> enemies, int lootTier, int bossId);
@@ -95,6 +102,7 @@ private:
     void resolveTrap(int difficulty);
     void giveLoot(int tier);
     void updateLosses();
+    int floor_ = 1;
 
     Dungeon dungeon_;
     Party party_;

@@ -14,6 +14,7 @@ const char* roleTitle(Role r) {
         case Role::Paladin:   return "Защитник-целитель";
         case Role::Berserker: return "Яростный боец";
         case Role::Druid:     return "Лекарь группы";
+        case Role::Bard:      return "Вдохновитель";
     }
     return "";
 }
@@ -27,7 +28,8 @@ const char* roleAbility(Role r) {
         case Role::Archer:    return "Залп: бьёт двух врагов с 80% урона, а единственную цель - одним выстрелом со 100% урона.";
         case Role::Paladin:   return "Провокация и благословение: после атаки лечит самого раненого на 2.";
         case Role::Berserker: return "Ярость: +50% урона, когда здоровье ниже половины.";
-        case Role::Druid:     return "Цепное лечение: лечит случайного союзника на 4 + 50% своей ЗАЩ, следующего на 3, затем на 2 и 1 - всех членов отряда.";
+        case Role::Druid:     return "Цепное лечение: лечит союзников по цепочке.";
+        case Role::Bard:      return "Вдохновение: усиливает сильнейшего союзника в бою; даёт скидку у торговца.";
     }
     return "";
 }
@@ -72,7 +74,7 @@ void Hero::recalc() {
         hp = std::max(1, std::min(hp, newMax));
     }
     maxHp = newMax;
-    atk = baseAtk + buffAtk + atkB;
+    atk = baseAtk + buffAtk + buffAtkCombat + atkB;
     def = baseDef + buffDef + defB;
     spd = baseSpd + spdB;
     critPct = crit + metaCritPct;
@@ -100,6 +102,7 @@ std::vector<Hero> heroRoster() {
         makeHero("Паладин", Role::Paladin,   38, 6, 4, 3),
         makeHero("Берсерк", Role::Berserker, 34, 10, 1, 5),
         makeHero("Друид",   Role::Druid,     27, 4, 1, 4),
+        makeHero("Бард",    Role::Bard,      29, 6, 2, 4),
     };
 }
 
@@ -169,6 +172,21 @@ std::string itemBonusText(const Item& it) {
     return "";
 }
 
+
+Item upgradeItem(const Item& it) {
+    static const char* weapons[4] = {"Ржавый меч", "Стальной клинок", "Зачарованный клинок", "Клинок героя"};
+    static const char* armors[4]  = {"Кожаная куртка", "Кольчуга", "Латы", "Драконья чешуя"};
+    static const char* relics[4]  = {"Амулет жизни", "Перо ветра", "Глаз сокола", "Клык вампира"};
+    Item up = it; up.tier = std::min(4, it.tier + 1);
+    switch (up.kind) {
+      case ItemKind::Weapon: up.name = weapons[up.tier-1]; up.power = up.tier*2+1; break;
+      case ItemKind::Armor: up.name = armors[up.tier-1]; up.power = up.tier+1; break;
+      case ItemKind::Relic: up.name = relics[static_cast<int>(it.relic)];
+        switch(it.relic) { case RelicEffect::Vitality: up.power=7*up.tier; break; case RelicEffect::Haste: up.power=up.tier; break; case RelicEffect::Keen: up.power=8*up.tier; break; case RelicEffect::Vampire: up.power=7*up.tier; break; } break;
+      case ItemKind::Potion: up.power=10*up.tier; break;
+    } return up;
+}
+
 // ----------------------------------------------------------------- магазин
 
 int itemPrice(const Item& it) {
@@ -236,6 +254,7 @@ void Party::healPercent(int pct) {
     for (auto& h : heroes)
         if (h.alive()) h.hp = std::min(h.maxHp, h.hp + h.maxHp * pct / 100);
 }
+void Party::clearCombatBuffs() { for (auto& h : heroes) { h.buffAtkCombat = 0; h.recalc(); } }
 void Party::buff(int index, int atk, int def) {
     if (index < 0 || index >= static_cast<int>(heroes.size()) || !heroes[index].alive()) return;
     heroes[index].buffAtk += atk;
@@ -243,8 +262,11 @@ void Party::buff(int index, int atk, int def) {
     heroes[index].recalc();
 }
 Hero* Party::findAlive(Role r) {
-    for (auto& h : heroes)
-        if (h.alive() && h.role == r) return &h;
+    for (auto& h : heroes) if (h.alive() && h.role == r) return &h;
+    return nullptr;
+}
+const Hero* Party::findAlive(Role r) const {
+    for (const auto& h : heroes) if (h.alive() && h.role == r) return &h;
     return nullptr;
 }
 

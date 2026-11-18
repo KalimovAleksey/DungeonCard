@@ -12,9 +12,9 @@ const std::vector<Achievement>& achievements() {
         for (int b = 0; b < kBossCount; ++b)
             v.push_back({b, "Боссы", "Победа: " + bossInfo(b).name, "Победить босса: " + bossInfo(b).name + ".", kAchievementArtifacts});
         const auto roster = heroRoster();
-        for (const auto& h : roster)
+        for (size_t i = 0; i < roster.size() && i < 8; ++i) { const auto& h = roster[i];
             v.push_back({100 + static_cast<int>(h.role), "Герои", "Путь героя: " + h.name,
-                         "Победить босса с героем " + h.name + " в отряде.", kAchievementArtifacts});
+                         "Победить босса с героем " + h.name + " в отряде.", kAchievementArtifacts}); }
         v.push_back({200, "Особые", "Без потерь", "Победить босса, не потеряв ни одного героя (воскрешённый тоже считается потерей).",
                      kAchievementArtifacts});
         v.push_back({201, "Особые", "Последний герой", "Победить босса, когда в живых остался лишь один герой.", kAchievementArtifacts});
