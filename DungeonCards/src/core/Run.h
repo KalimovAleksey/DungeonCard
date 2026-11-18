@@ -17,6 +17,7 @@ enum class RunPhase { Exploring, Fighting, RestChoice, BossIntro, Shop, ForgeCho
 
 class Run {
 public:
+    Run(const Dungeon& dungeon, uint32_t seed, Party party, int floor = 1);
     static constexpr int kRestHealPct = 20;        // базовое лечение на привале
     static constexpr int kRestHealPaladinPct = 40; // с Паладином в отряде
     static constexpr int kBuffAtk = 3;             // бафф на привале
@@ -80,8 +81,9 @@ public:
     const std::vector<std::string>& log() const { return log_; }
     const std::vector<Item>& loot() const { return loot_; }
     int roomsCleared() const { return cleared_; }
-
+    int floor() const { return floor_; }
 private:
+    int floor_ = 1;
     void say(const std::string& s);
     void enterRoom(Vec2i p);
     void startFight(std::vector<Enemy> enemies, int lootTier, int bossId);

@@ -3,12 +3,14 @@
 
 namespace dc {
 
-Run::Run(const Dungeon& dungeon, uint32_t seed, std::vector<Hero> heroes)
+Run::Run(const Dungeon& dungeon, uint32_t seed, Party party, int floor)
     : dungeon_(dungeon),
-      party_(heroes.empty() ? Party() : Party(std::move(heroes))),
+      party_(std::move(party)), // <-- забираем готовый отряд
       rng_(seed),
-      pos_(dungeon.startPos()) {
-    say("Отряд входит в подземелье. WASD - идти, I - инвентарь.");
+      pos_(dungeon.startPos()), 
+      floor_(floor) 
+{
+    say(fmt("Этаж %d. Отряд входит в подземелье. WASD - идти, I - инвентарь.", floor_));
 }
 
 void Run::say(const std::string& s) {
@@ -47,12 +49,12 @@ void Run::enterRoom(Vec2i p) {
 
     switch (r->card.type) {
         case RoomType::Combat:
-            startFight(makeEnemies(d, rng_), d, -1);
+            startFight(makeEnemies(d, rng_, floor_), d, -1);
             break;
         case RoomType::Treasure:
             if (d >= 2) {
                 say("Сокровище охраняют!");
-                startFight(makeEnemies(d - 1, rng_), d, -1);
+                startFight(makeEnemies(d - 1, rng_, floor_), d, -1);
             } else {
                 ++cleared_;
                 giveLoot(d);
@@ -97,7 +99,7 @@ void Run::startFight(std::vector<Enemy> enemies, int lootTier, int bossId) {
 void Run::beginBossFight() {
     if (phase_ != RunPhase::BossIntro) return;
     say("Бой с боссом начался!");
-    startFight({makeBoss(pendingBoss_)}, 4, pendingBoss_);
+    startFight({makeBoss(pendingBoss_, floor_)}, 4, pendingBoss_);
 }
 
 void Run::step() {

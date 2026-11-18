@@ -29,8 +29,12 @@ public:
     void run();
 
 private:
-    bool restActionDone_ = false;   
+    int currentFloor_ = 1;
+    std::vector<int> defeatedBosses_; // Список ID боссов, которых уже прошли
+    bool restActionDone_ = false;
+
     enum class Screen { MainMenu, Select, Build, Run, Result, Pause, Settings };
+
     struct Settings {
         int width = 1280;
         int height = 720;
@@ -82,6 +86,8 @@ private:
 
     // состояние партии
     void rollRun();                 // новый забег: seed и три предложенных босса
+    void nextFloor();
+    void resetForNewRun();
     void newGame(uint32_t seed);
     void refill(Slot& s);
     void startRun();
@@ -131,7 +137,7 @@ private:
     void drawRestOverlay();
     void drawInventory();
     void drawShop();
-    void drawForge(); 
+    void drawForge();
     void drawBossCard(int x, int y, int w, int h, int bossId) const;
     void drawBossIntro();
     void drawResult();
@@ -149,6 +155,8 @@ private:
                      float y, float size, Color tint = Color{255, 255, 255, 255}) const;
     void drawItemIcon(const Item& it, float x, float y, float size) const;
     void drawCoin(float cx, float cy, float radius) const;
+    void drawStar(float cx, float cy, float r, Color col) const;
+    void drawStars(float x, float y, int count, float r) const;   // звёзды уровня предмета (крупные, с контуром)
     void drawBagCell(int x, int y, int size, const Item* it, bool selected, bool hover) const;
     void drawEquipSlot(int x, int y, int size, ItemKind kind, const std::optional<Item>& item, bool fits, bool hover) const;
     void drawItemTooltip(const Item& it, Vector2 at) const;
@@ -191,7 +199,7 @@ private:
     Dungeon dungeon_;
     std::unique_ptr<Run> run_;
     Slot hand_[kHand];
-    
+
     int selected_ = 0;
     // Прокрутка экрана выбора героев
     float selScroll_ = 0.f;      // текущее смещение
@@ -226,7 +234,7 @@ private:
     int invSel_ = -1;
     std::string invMsg_;
     std::string shopMsg_;
-    std::string forgeMsg_; 
+    std::string forgeMsg_;
 
     // анимация боя
     int lastFightId_ = 0;
