@@ -160,6 +160,37 @@ std::string itemBonusText(const Item& it) {
     }
     return "";
 }
+Item upgradeItem(const Item& it) {
+    static const char* weapons[4] = {"Ржавый меч", "Стальной клинок", "Зачарованный клинок", "Клинок героя"};
+    static const char* armors[4]  = {"Кожаная куртка", "Кольчуга", "Латы", "Драконья чешуя"};
+    static const char* relics[4]  = {"Амулет жизни", "Перо ветра", "Глаз сокола", "Клык вампира"};
+    Item up = it;
+    up.tier = std::min(4, it.tier + 1);
+    switch (up.kind) {
+        case ItemKind::Weapon:
+            up.name = weapons[up.tier - 1];
+            up.power = up.tier * 2 + 1;
+            break;
+        case ItemKind::Armor:
+            up.name = armors[up.tier - 1];
+            up.power = up.tier + 1;
+            break;
+        case ItemKind::Relic:
+            up.name = relics[static_cast<int>(it.relic)];
+            switch (it.relic) {
+                case RelicEffect::Vitality: up.power = 7 * up.tier; break;
+                case RelicEffect::Haste:    up.power = up.tier;     break;
+                case RelicEffect::Keen:     up.power = 8 * up.tier; break;
+                case RelicEffect::Vampire:  up.power = 7 * up.tier; break;
+            }
+            break;
+        case ItemKind::Potion:
+            up.name = it.name;
+            up.power = 10 * up.tier;
+            break;
+    }
+    return up;
+}
 
 // ----------------------------------------------------------------- магазин
 

@@ -13,20 +13,21 @@ namespace dc {
 // Exploring: игрок ходит по комнатам (WASD) и управляет инвентарём.
 // Fighting: автобой. RestChoice: привал, ждём решения. BossIntro: показана карточка босса.
 // Shop: отряд у торговца (покупка за монеты).
-enum class RunPhase { Exploring, Fighting, RestChoice, BossIntro, Shop, Victory, Defeat };
+enum class RunPhase { Exploring, Fighting, RestChoice, BossIntro, Shop, ForgeChoice, Victory, Defeat };
 
 class Run {
 public:
     static constexpr int kRestHealPct = 20;        // базовое лечение на привале
     static constexpr int kRestHealPaladinPct = 40; // с Паладином в отряде
-    static constexpr int kBuffAtk = 3;       // бафф на привале
+    static constexpr int kBuffAtk = 3;             // бафф на привале
     static constexpr int kBuffDef = 1;
     static constexpr int kBuffTargets = 2;
 
-    static constexpr int kReviveChancePct = 25;  // шанс успеха
-    static constexpr int kReviveChanceClericPct = 50; // шанс успеха с жрицей
-    static constexpr int kReviveHpPct = 30;      // доля макс. HP при успехе
-    static constexpr int kArcherCoinBonusPct = 25; // +25% монет, если жив Лучник
+    static constexpr int kReviveChancePct = 25;         // шанс успеха
+    static constexpr int kReviveChanceClericPct = 50;   // шанс успеха с жрицей
+    static constexpr int kReviveHpPct = 30;             // доля макс. HP при успехе
+    static constexpr int kArcherCoinBonusPct = 25;      // +25% монет, если жив Лучник
+    static constexpr int kForgePricePct = 60;           // цена улучшения = 60% цены предмета следующего tier
 
     bool canRestRevive() const;  // есть ли павший герой
     void restRevive(); 
@@ -54,6 +55,9 @@ public:
     bool openShop();                                  // открыть торговлю (если стоим у торговца)
     bool buy(int offerIndex);                         // купить лот: монеты -> предмет в рюкзак
     void leaveShop();
+    bool forgeUpgrade(int bagIndex);                  // улучшить предмет из рюкзака (tier+1) за монеты
+    int  forgePrice(const Item& it) const;            // цена улучшения предмета
+    void leaveForge();
     const std::vector<ShopOffer>* shopStock() const;  // лоты текущего торговца или nullptr
     void grantCoins(int n) { party_.coins += n; }     // для тестов и отладки
     // --- инвентарь (доступен вне боя, у торговца и на карточке босса) ---

@@ -57,10 +57,11 @@ Color roomColor(RoomType t) {
         case RoomType::Start:    return {90, 110, 150, 255};
         case RoomType::Combat:   return {170, 70, 70, 255};
         case RoomType::Treasure: return {200, 165, 60, 255};
-        case RoomType::Trap:     return {185, 105, 45, 255};
+        case RoomType::Trap:     return {150, 200, 50, 255};
         case RoomType::Rest:     return {70, 150, 90, 255};
         case RoomType::Boss:     return {135, 55, 165, 255};
         case RoomType::Shop:     return {55, 160, 175, 255};
+        case RoomType::Forge:    return {200, 120, 60, 255};   // оранжево-медный
     }
     return kDim;
 }
@@ -112,10 +113,11 @@ Color itemColor(ItemKind k) {
 
 std::string rewardText(const Card& c) {
     switch (c.type) {
-        case RoomType::Boss: return "Награда: победа в забеге!";
-        case RoomType::Rest: return "Награда: лечение или бафф";
-        case RoomType::Shop: return "Тратишь монеты, выпавшие с врагов";
+        case RoomType::Boss:  return "Награда: победа в забеге!";
+        case RoomType::Rest:  return "Награда: лечение или бафф";
+        case RoomType::Shop:  return "Тратишь монеты, выпавшие с врагов";
         case RoomType::Start: return "";
+        case RoomType::Forge: return "Обмен предмета на tier+1 за монеты";
         default: return fmt("Награда: добыча ур. %d", c.difficulty);
     }
 }
@@ -660,7 +662,32 @@ void Game::updateBuild() {
 }
 
 // ------------------------------------------------------------------- поход
-
+void Game::updateForge() {
+    const Vector2 m = mouse();
+    if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_ESCAPE)) {
+        run_->leaveForge();
+        forgeMsg_.clear();
+        return;
+    }
+    const auto& bag = run_->party().bag;
+    if (!IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) return;
+    // Ячейки рюкзака - как в инвентаре (bagCell)
+    for (int i = 0; i < static_cast<int>(bag.size()) && i < kBagCells; ++i) {
+        if (!inR(m, bagCell(i))) continue;
+        const Item& it = bag[i];
+        if (it.tier >= 4) {
+            forgeMsg_ = "Этот предмет уже максимального уровня.";
+        } else if (it.kind == ItemKind::Potion) {
+            forgeMsg_ = "Зелья не улучшаются.";
+        } else if (run_->party().coins < run_->forgePrice(it)) {
+            forgeMsg_ = fmt("Не хватает монет: нужно %d, есть %d.",
+                            run_->forgePrice(it), run_->party().coins);
+        } else if (run_->forgeUpgrade(i)) {
+            forgeMsg_ = "Улучшено!";
+        }
+        return;
+    }
+}
 void Game::updateRun(float dt) {
     if (!inRest_) {
         inRest_ = true;
@@ -753,7 +780,11 @@ void Game::updateRun(float dt) {
                     onRunStep();
                 }
             }
-            break;
+            break;                         // <-- ДОБАВИТЬ break
+        case RunPhase::ForgeChoice:
+            if (invOpen_) updateInventory();
+            else updateForge();
+            break;                         // <-- оставить один break
         default:
             break;
     }
@@ -1860,7 +1891,54 @@ void Game::drawInventory() {
 
     if (hoverItem) drawItemTooltip(*hoverItem, m);
 }
+//отрисовка кузницы
+void Game::drawForge() {
+    const Vector2 m = mouse();
+    const Color bronze = roomColor(RoomType::Forge);
+    drawBackground("backgrounds/arena.png", kGridX, kGridY, kArenaW, kArenaH);
+    DrawRectangle(kGridX, kGridY, kArenaW, kArenaH,
+                  tex("backgrounds/arena.png") ? Color{18, 12, 8, 170} : Color{28, 22, 18, 255});
+    DrawRectangleLines(kGridX, kGridY, kArenaW, kArenaH, bronze);
+    drawText("КУЗНИЦА", kGridX + 20.f, kGridY + 12.f, 34, bronze);
+    drawCoin(kGridX + 556.f, kGridY + 30.f, 11.f);
+    drawText(fmt("Монеты: %d", run_->party().coins), kGridX + 574.f, kGridY + 18.f, 22, kCoin);
+    drawText("Клик по предмету в рюкзаке - улучшить (tier+1).", kGridX + 22.f, kGridY + 58.f, 15, kDim);
 
+    const auto& bag = run_->party().bag;
+    const Item* hoverItem = nullptr;
+    for (int i = 0; i < kBagCells; ++i) {
+        const R r = bagCell(i);
+        const Item* it = i < static_cast<int>(bag.size()) ? &bag[i] : nullptr;
+        const bool hover = it && inR(m, r);
+        if (hover) hoverItem = it;
+        drawBagCell(r.x, r.y, r.w, it, false, hover);
+        if (it && it->tier < 4) {
+            const int price = run_->forgePrice(*it);
+            const bool afford = run_->party().coins >= price;
+            drawText(fmt("%d", price), static_cast<float>(r.x + 2), static_cast<float>(r.y + r.h + 2), 12,
+                     afford ? kCoin : kBad);
+        }
+    }
+
+    // превью выбранного/наведённого предмета
+    if (hoverItem) {
+        const int y0 = kGridY + 360;
+        const int x0 = kGridX + 12;
+        drawText("Предмет:", static_cast<float>(x0), static_cast<float>(y0), 16, kAccent);
+        drawText(fmt("%s (%s, ур.%d)", hoverItem->name.c_str(), itemKindName(hoverItem->kind), hoverItem->tier),
+                 static_cast<float>(x0), static_cast<float>(y0 + 22), 16, kText);
+        drawText(itemBonusText(*hoverItem), static_cast<float>(x0), static_cast<float>(y0 + 44), 14, kDim);
+        if (hoverItem->tier < 4 && hoverItem->kind != ItemKind::Potion) {
+            const int price = run_->forgePrice(*hoverItem);
+            drawText(fmt("Улучшение: %d монет", price), static_cast<float>(x0), static_cast<float>(y0 + 66), 15,
+                     run_->party().coins >= price ? kGood : kBad);
+        }
+        drawItemTooltip(*hoverItem, m);
+    }
+
+    if (!forgeMsg_.empty()) drawText(forgeMsg_, kGridX + 22.f, kGridY + 478.f, 16, kAccent);
+    drawTextCentered("Enter/Esc - уйти     I - инвентарь", kGridX + kArenaW / 2.f, kGridY + kArenaH - 34.f, 18, kAccent);
+}
 // Лавка торговца: ячейки-лоты с иконками и ценами в монетах.
 void Game::drawShop() {
     const auto* stock = run_->shopStock();
@@ -1960,6 +2038,7 @@ void Game::drawRunView() {
     else if (invOpen_) drawInventory();
     else if (r.phase() == RunPhase::BossIntro) drawBossIntro();
     else if (r.phase() == RunPhase::Shop) drawShop();
+    else if (r.phase() == RunPhase::ForgeChoice) drawForge();
 
     // панель справа
     DrawRectangle(kPanelX - 10, 10, kPanelW + 20, kScreenH - 20, kPanel);

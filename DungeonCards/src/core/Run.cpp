@@ -70,6 +70,15 @@ void Run::enterRoom(Vec2i p) {
             phase_ = RunPhase::BossIntro;
             say(fmt("Логово босса: %s. Подготовь отряд!", bossInfo(pendingBoss_).name.c_str()));
             break;
+                case RoomType::Forge:
+            if (!r->visited) {
+                r->visited = true;
+                say("Кузница! Улучши предмет за монеты.");
+            } else {
+                say("Снова у кузницы.");
+            }
+            phase_ = RunPhase::ForgeChoice;
+            return;
         default:
             break;
     }
@@ -199,11 +208,37 @@ void Run::restBuff(const std::vector<int>& idx) {
     say(fmt("Привал: усилены %s (+%d АТК, +%d ЗАЩ).", names.c_str(), kBuffAtk, kBuffDef));
     phase_ = RunPhase::Exploring;
 }
+int Run::forgePrice(const Item& it) const {
+    if (it.tier >= 4) return 0;                  // нельзя
+    // цена предмета следующего tier * kForgePricePct%
+    Item next = it;
+    next.tier = it.tier + 1;
+    return itemPrice(next) * kForgePricePct / 100;
+}
 
+bool Run::forgeUpgrade(int bagIndex) {
+    if (phase_ != RunPhase::ForgeChoice) return false;
+    if (bagIndex < 0 || bagIndex >= static_cast<int>(party_.bag.size())) return false;
+    const Item it = party_.bag[bagIndex];
+    if (it.tier >= 4) return false;                  // tier 4 не улучшается
+    if (it.kind == ItemKind::Potion) return false;   // зелья не улучшаем
+    const int price = forgePrice(it);
+    if (party_.coins < price) return false;
+
+    const Item up = upgradeItem(it);                 // вся логика — в upgradeItem
+    party_.coins -= price;
+    party_.bag[bagIndex] = up;
+    say(fmt("Кузница: %s -> %s (за %d монет)", it.name.c_str(), up.name.c_str(), price));
+    return true;
+}
+
+void Run::leaveForge() {
+    if (phase_ == RunPhase::ForgeChoice) phase_ = RunPhase::Exploring;
+}
 // ------------------------------------------------------------ инвентарь
 
 bool Run::canManage() const {
-    return (phase_ == RunPhase::Exploring && !combat_) || phase_ == RunPhase::BossIntro || phase_ == RunPhase::Shop;
+    return (phase_ == RunPhase::Exploring && !combat_) || phase_ == RunPhase::BossIntro || phase_ == RunPhase::Shop || phase_ == RunPhase::ForgeChoice;
 }
 
 // ------------------------------------------------------------- торговец
