@@ -381,8 +381,8 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
                 if (bestAlly < 0 || party_.heroes[j].atk > party_.heroes[bestAlly].atk) bestAlly = j;
             }
             if (bestAlly >= 0) {
-                int bonusAtk = h.atk / 2; // Половина от АТК Барда
-                party_.heroes[bestAlly].buffAtk += bonusAtk;
+                int bonusAtk = h.atk / 2;
+                party_.heroes[bestAlly].buffAtkCombat += bonusAtk;   // <-- было buffAtk
                 party_.heroes[bestAlly].recalc();
                 
                 act.kind = CombatAction::Effect;

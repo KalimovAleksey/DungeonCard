@@ -110,6 +110,7 @@ void Run::step() {
         say(fmt("Монеты: +%d (всего %d)", gained, party_.coins));
     }
     if (combat_->finished()) {
+        party_.clearCombatBuffs();   // <-- сброс временных баффов боя
         if (combat_->heroesWon()) {
             onFightWon();
         } else {
@@ -120,6 +121,7 @@ void Run::step() {
 }
 
 void Run::closeCombat() {
+    if (combat_) party_.clearCombatBuffs();
     if (combat_ && phase_ == RunPhase::Exploring) combat_.reset();
 }
 

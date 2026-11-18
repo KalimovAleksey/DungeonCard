@@ -39,6 +39,7 @@ struct Hero {
     // базовые значения
     int baseHp = 1, baseAtk = 1, baseDef = 0, baseSpd = 1;
     int buffAtk = 0, buffDef = 0;  // баффы с привала
+    int buffAtkCombat = 0;         // временный бафф на бой (Бард)
     bool away = false;             // проглочен боссом: не участвует в бою
     std::optional<Item> weapon, armor, relic;
 
@@ -62,7 +63,7 @@ struct ShopOffer {
 };
 int itemPrice(const Item& it);                              // цена в монетах
 std::vector<ShopOffer> makeShopStock(Rng& rng, int count);  // т1 часто, т2 нередко, т3 редко
-
+void clearCombatBuffs();
 class Party {
 public:
     Party();                                // отряд по умолчанию: первые четыре героя

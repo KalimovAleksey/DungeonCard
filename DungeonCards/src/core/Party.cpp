@@ -74,7 +74,7 @@ void Hero::recalc() {
         hp = std::max(1, std::min(hp, newMax));
     }
     maxHp = newMax;
-    atk = baseAtk + buffAtk + atkB;
+    atk = baseAtk + buffAtk + buffAtkCombat + atkB;
     def = baseDef + buffDef + defB;
     spd = baseSpd + spdB;
     critPct = crit;
@@ -233,6 +233,14 @@ void Party::buff(int index, int atk, int def) {
     heroes[index].buffAtk += atk;
     heroes[index].buffDef += def;
     heroes[index].recalc();
+}
+void Party::clearCombatBuffs() {
+    for (auto& h : heroes) {
+        if (h.buffAtkCombat != 0) {
+            h.buffAtkCombat = 0;
+            h.recalc();
+        }
+    }
 }
 Hero* Party::findAlive(Role r) {
     for (auto& h : heroes)
