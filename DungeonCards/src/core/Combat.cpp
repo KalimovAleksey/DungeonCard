@@ -14,7 +14,7 @@ int calcDmg(int atk, int def) { return std::max(minDmg(atk), atk - def); }
 
 // ---------------------------------------------------------------- враги
 
-std::vector<Enemy> makeEnemies(int d, Rng& rng, int coinBonusPct) {
+std::vector<Enemy> makeEnemies(int d, Rng& rng, int floor) {
     d = std::max(1, std::min(3, d));
     static const char* names[3][3] = {
         {"Гоблин", "Крыса", "Скелет"},
@@ -32,12 +32,15 @@ std::vector<Enemy> makeEnemies(int d, Rng& rng, int coinBonusPct) {
     const int pick = rng.range(0, 2);
     std::string base = names[d - 1][pick];
     std::vector<Enemy> out;
+    const int hpBonus = (floor - 1) * 20; // +20 HP за этаж
+    const int atkBonus = (floor - 1) * 2; // +2 ATK за этаж
+
     for (int i = 0; i < s.count; ++i) {
         Enemy e;
         e.name = base + " " + std::to_string(i + 1);
-        e.maxHp = e.hp = s.hp + rng.range(-2, 2);
-        e.atk = s.atk;
-        e.def = s.def;
+        e.maxHp = e.hp = (s.hp + rng.range(-2, 2)) + hpBonus;
+        e.atk = s.atk + atkBonus;
+        e.def = s.def + (floor - 1); // +1 DEF за этаж
         e.spd = s.spd;
         e.slot = i;
         e.coins = rng.range(s.coinMin, s.coinMax) * (100 + std::max(0, coinBonusPct)) / 100;
@@ -47,13 +50,13 @@ std::vector<Enemy> makeEnemies(int d, Rng& rng, int coinBonusPct) {
     return out;
 }
 
-Enemy makeBoss(int id) {
+Enemy makeBoss(int id, int floor) {
     const BossInfo& info = bossInfo(id);
     Enemy e;
     e.name = info.name;
-    e.maxHp = e.hp = info.hp;
-    e.atk = info.atk;
-    e.def = info.def;
+    e.maxHp = e.hp = info.hp + (floor - 1) * 100; // Боссы жирнеют
+    e.atk = info.atk + (floor - 1) * 5;
+    e.def = info.def + (floor - 1) * 2;
     e.spd = info.spd;
     e.bossId = id;
     e.boss = true;

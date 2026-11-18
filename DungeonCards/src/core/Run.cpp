@@ -3,45 +3,14 @@
 
 namespace dc {
 
-Run::Run(const Dungeon& dungeon, uint32_t seed, std::vector<Hero> heroes, RunOptions options)
+Run::Run(const Dungeon& dungeon, uint32_t seed, Party party, int floor)
     : dungeon_(dungeon),
-      party_(heroes.empty() ? Party() : Party(std::move(heroes))),
+      party_(std::move(party)), // <-- забираем готовый отряд
       rng_(seed),
-      pos_(dungeon.startPos()),
-      meta_(options.meta),
-      artifacts_(std::max(0, options.artifacts)) {
-    say("Отряд входит в подземелье. WASD - идти, I - инвентарь.");
-    for (const auto& h : party_.heroes) squad_.push_back(h.role);
-    died_.assign(party_.heroes.size(), false);
-
-    // Наследие: стартовые монеты и зелья («Дар предков»: 1 или 2 зелья).
-    party_.coins = meta_.startCoins();
-    const int gifts = meta_.provisions();
-    for (int i = 0; i < std::min(2, gifts); ++i) party_.bag.push_back(makePotion(1));
-    if (gifts > 0) say(fmt("Дар предков: в рюкзаке %d зелья.", std::min(2, gifts)));
-    updateLosses();
-}
-
-// Фиксируем каждого, кто хоть раз пал (воскрешённый остаётся в списке потерь).
-void Run::updateLosses() {
-    for (size_t i = 0; i < party_.heroes.size() && i < died_.size(); ++i)
-        if (!party_.heroes[i].alive()) died_[i] = true;
-}
-
-int Run::casualties() const {
-    int n = 0;
-    for (bool d : died_) n += d ? 1 : 0;
-    return n;
-}
-
-RunSummary Run::summary() const {
-    RunSummary s;
-    s.victory = phase_ == RunPhase::Victory;
-    s.bossId = fightBoss_;
-    s.squad = squad_;
-    s.casualties = casualties();
-    s.aliveAtEnd = party_.aliveCount();
-    return s;
+      pos_(dungeon.startPos()), 
+      floor_(floor) 
+{
+    say(fmt("Этаж %d. Отряд входит в подземелье. WASD - идти, I - инвентарь.", floor_));
 }
 
 void Run::say(const std::string& s) {
@@ -80,12 +49,12 @@ void Run::enterRoom(Vec2i p) {
 
     switch (r->card.type) {
         case RoomType::Combat:
-            startFight(makeEnemies(d, rng_, meta_.coinBonusPct()), d, -1);
+            startFight(makeEnemies(d, rng_, floor_), d, -1);
             break;
         case RoomType::Treasure:
             if (d >= 2) {
                 say("Сокровище охраняют!");
-                startFight(makeEnemies(d - 1, rng_, meta_.coinBonusPct()), d, -1);
+                startFight(makeEnemies(d - 1, rng_, floor_), d, -1);
             } else {
                 ++cleared_;
                 giveLoot(d);
@@ -122,7 +91,7 @@ void Run::startFight(std::vector<Enemy> enemies, int lootTier, int bossId) {
 void Run::beginBossFight() {
     if (phase_ != RunPhase::BossIntro) return;
     say("Бой с боссом начался!");
-    startFight({makeBoss(pendingBoss_)}, 4, pendingBoss_);
+    startFight({makeBoss(pendingBoss_, floor_)}, 4, pendingBoss_);
 }
 
 void Run::step() {
