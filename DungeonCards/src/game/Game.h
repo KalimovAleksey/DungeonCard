@@ -226,6 +226,7 @@ private:
     int invSel_ = -1;
     std::string invMsg_;
     std::string shopMsg_;
+    std::string forgeMsg_; 
 
     // анимация боя
     int lastFightId_ = 0;
