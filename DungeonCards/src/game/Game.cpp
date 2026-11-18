@@ -57,7 +57,7 @@ Color roomColor(RoomType t) {
         case RoomType::Start:    return {90, 110, 150, 255};
         case RoomType::Combat:   return {170, 70, 70, 255};
         case RoomType::Treasure: return {200, 165, 60, 255};
-        case RoomType::Trap:     return {150, 200, 50, 255};
+        case RoomType::Trap:     return {185, 105, 45, 255};
         case RoomType::Rest:     return {70, 150, 90, 255};
         case RoomType::Boss:     return {135, 55, 165, 255};
         case RoomType::Shop:     return {55, 160, 175, 255};
@@ -76,7 +76,6 @@ Color roleColor(Role r) {
         case Role::Paladin:   return {225, 185, 70, 255};
         case Role::Berserker: return {215, 85, 65, 255};
         case Role::Druid:     return {80, 185, 115, 255};
-        case Role::Bard:      return {255, 105, 180, 255};
     }
     return kDim;
 }
@@ -113,11 +112,10 @@ Color itemColor(ItemKind k) {
 
 std::string rewardText(const Card& c) {
     switch (c.type) {
-        case RoomType::Boss:  return "Награда: победа в забеге!";
-        case RoomType::Rest:  return "Награда: лечение или бафф";
-        case RoomType::Shop:  return "Тратишь монеты, выпавшие с врагов";
+        case RoomType::Boss: return "Награда: победа в забеге!";
+        case RoomType::Rest: return "Награда: лечение или бафф";
+        case RoomType::Shop: return "Тратишь монеты, выпавшие с врагов";
         case RoomType::Start: return "";
-        case RoomType::Forge: return "Обмен предмета на tier+1 за монеты";
         default: return fmt("Награда: добыча ур. %d", c.difficulty);
     }
 }
@@ -136,6 +134,15 @@ bool inRect(Vector2 m, int x, int y, int w, int h) { return inR(m, {x, y, w, h})
 
 // кнопки меню
 R menuBtn(int i, int y0 = 300) { return {490, y0 + i * 72, 300, 56}; }
+
+// экран достижений: два столбца по 9 строк; экран «Наследие»: два столбца карточек
+R achRow(int i) { return {40 + (i / 9) * 620, 130 + (i % 9) * 58, 600, 54}; }
+R legacyCard(int i) { return {40 + (i / 6) * 620, 124 + (i % 6) * 86, 600, 80}; }
+R legacyBuyBtn(int i) {
+    R c = legacyCard(i);
+    return {c.x + c.w - 150, c.y + 14, 138, 52};
+}
+const R kBackBtn{440, 660, 400, 44};
 R resBtn(int i) { return {440, 190 + i * 58, 400, 48}; }
 
 // геометрия окна инвентаря
@@ -315,6 +322,25 @@ Vector2 Game::mouse() const {
     return {(m.x - ox) / sc, (m.y - oy) / sc};
 }
 
+// ------------------------------------------------------------------ профиль
+
+void Game::loadProfile() { profile_ = Profile::loadFile(profilePath_); }
+void Game::saveProfile() const { profile_.saveFile(profilePath_); }
+
+// Герои на экране выбора и в забеге уже с улучшениями Наследия (применяются ровно один раз).
+void Game::refreshRoster() {
+    roster_ = heroRoster();
+    for (auto& h : roster_) profile_.meta.applyToHero(h);
+}
+
+// Итог забега: за победу над боссом - артефакты, плюс награды за новые достижения.
+void Game::recordRunResult() {
+    if (runRecorded_ || !run_) return;
+    runRecorded_ = true;
+    lastReward_ = profile_.recordRun(run_->summary());
+    saveProfile();
+}
+
 int Game::chosenCount() const {
     int n = 0;
     for (int i = 0; i < static_cast<int>(roster_.size()) && i < kMaxRoster; ++i) n += chosen_[i] ? 1 : 0;
@@ -322,6 +348,7 @@ int Game::chosenCount() const {
 }
 
 void Game::rollRun() {
+    refreshRoster();  // вдруг в «Наследии» что-то купили
     std::random_device rd;
     nextSeed_ = rd();
     Rng tmp(nextSeed_);
@@ -371,8 +398,8 @@ void Game::newGame(uint32_t seed) {
     run_.reset();
     for (auto& s : hand_) s.has = false;
     for (auto& s : hand_) refill(s);
-    placementsLeft_ = kMaxPlacements;
-    discardsLeft_ = kMaxDiscards;
+    placementsLeft_ = kMaxPlacements + profile_.meta.extraPlacements();   // «Мастер-строитель»
+    discardsLeft_ = kMaxDiscards + profile_.meta.extraDiscards();         // «Запасная колода»
     selected_ = 0;
     screen_ = Screen::Build;
     resultText_.clear();
@@ -485,6 +512,8 @@ void Game::update(float dt) {
     if (IsKeyPressed(KEY_ESCAPE)) {
         switch (screen_) {
             case Screen::Settings: screen_ = settingsBack_; break;
+            case Screen::Achievements:
+            case Screen::Legacy:   screen_ = Screen::MainMenu; break;
             case Screen::Pause:    screen_ = prevScreen_; break;
             case Screen::MainMenu: break;
             default:
@@ -510,6 +539,8 @@ void Game::update(float dt) {
         case Screen::Run: updateRun(dt); break;
         case Screen::Pause: updatePause(); break;
         case Screen::Settings: updateSettings(); break;
+        case Screen::Achievements: updateAchievements(); break;
+        case Screen::Legacy: updateLegacy(); break;
         case Screen::Result: break;
     }
 }
@@ -520,20 +551,51 @@ void Game::updateMainMenu() {
     const Vector2 m = mouse();
     const bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     int pick = IsKeyPressed(KEY_ENTER) ? 0 : -1;
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < 5; ++i)
         if (click && inR(m, menuBtn(i))) pick = i;
     if (pick == 0) {
         resetForNewRun();
         rollRun();
         setMessage("Выбери четырёх героев и босса для похода.", false);
         screen_ = Screen::Select;
-        selScroll_ = 0.f;
-        selScrollTarget_ = 0.f;
     } else if (pick == 1) {
+        screen_ = Screen::Achievements;
+    } else if (pick == 2) {
+        legacyMsg_.clear();
+        screen_ = Screen::Legacy;
+    } else if (pick == 3) {
         settingsBack_ = Screen::MainMenu;
         screen_ = Screen::Settings;
-    } else if (pick == 2) {
+    } else if (pick == 4) {
         quit_ = true;
+    }
+}
+
+// Достижения: просмотр списка (награда выдаётся автоматически при выполнении условия).
+void Game::updateAchievements() {
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && inR(mouse(), kBackBtn)) screen_ = Screen::MainMenu;
+}
+
+// «Наследие»: покупка постоянных улучшений за артефакты.
+void Game::updateLegacy() {
+    const Vector2 m = mouse();
+    if (!IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) return;
+    if (inR(m, kBackBtn)) {
+        screen_ = Screen::MainMenu;
+        return;
+    }
+    for (int u = 0; u < kUpgradeCount; ++u) {
+        if (!inR(m, legacyBuyBtn(u))) continue;
+        const UpgradeInfo& info = upgradeInfo(u);
+        if (profile_.meta.maxed(u)) {
+            legacyMsg_ = info.name + ": уже максимальный уровень.";
+        } else if (profile_.artifacts < profile_.meta.nextCost(u)) {
+            legacyMsg_ = fmt("Не хватает артефактов: нужно %d, есть %d.", profile_.meta.nextCost(u), profile_.artifacts);
+        } else if (profile_.buyUpgrade(u)) {
+            saveProfile();
+            legacyMsg_ = fmt("Улучшено: %s (ур. %d). Действует в следующих забегах.", info.name.c_str(), profile_.meta.level[u]);
+        }
+        return;
     }
 }
 
@@ -607,7 +669,7 @@ void Game::updateSelect() {
     selScroll_ += (selScrollTarget_ - selScroll_) * 15.f * GetFrameTime();
     if (std::abs(selScroll_ - selScrollTarget_) < 0.5f) selScroll_ = selScrollTarget_;
 
-    const int keys[kMaxRoster] = {KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR, KEY_FIVE, KEY_SIX, KEY_SEVEN, KEY_EIGHT, KEY_NINE};
+    const int keys[kMaxRoster] = {KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR, KEY_FIVE, KEY_SIX, KEY_SEVEN, KEY_EIGHT};
     Vector2 m = mouse();
     bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     if (currentFloor_ == 1) {
@@ -883,37 +945,79 @@ void Game::updateExplore(float dt) {
 }
 
 void Game::updateRestChoice() {
-    if (restActionDone_) return;
-
     Vector2 m = mouse();
     bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     const auto& hs = run_->party().heroes;
 
     if (restStage_ == 0) {
-        const int bw = 216, bh = 220, by = kGridY + 110, gap = 12;
-        const int xs[3] = {
-            kGridX + 16,
-            kGridX + 16 + bw + gap,
-            kGridX + 16 + 2 * (bw + gap),
-        };
-
-        if (IsKeyPressed(KEY_ONE) || (click && inRect(m, xs[0], by, bw, bh))) {
+        const int by = kGridY + 130, bw = 224, bh = 220;
+        bool anyDead = false;
+        for (const auto& h : hs) anyDead |= !h.alive();
+        if (IsKeyPressed(KEY_ONE) || (click && inRect(m, kGridX + 14, by, bw, bh))) {
             run_->restHeal();
-            restActionDone_ = true;
             stepTimer_ = 0.f;
-        } else if (IsKeyPressed(KEY_TWO) || (click && inRect(m, xs[1], by, bw, bh))) {
+            restMsg_.clear();
+        } else if (IsKeyPressed(KEY_TWO) || (click && inRect(m, kGridX + 250, by, bw, bh))) {
             restStage_ = 1;
+            restMsg_.clear();
             std::fill(std::begin(restPick_), std::end(restPick_), false);
-        } else if ((IsKeyPressed(KEY_THREE) || (click && inRect(m, xs[2], by, bw, bh)))
-                   && run_->canRestRevive()) {
-            run_->restRevive();
-            restActionDone_ = true;
-            stepTimer_ = 0.f;
+        } else if (IsKeyPressed(KEY_THREE) || (click && inRect(m, kGridX + 486, by, bw, bh))) {
+            const bool canCoins = run_->party().coins >= run_->reviveCoinCost();
+            const bool canArtifact = run_->artifacts() >= Run::kReviveArtifactCost;
+            if (!anyDead) restMsg_ = "Павших героев нет.";
+            else if (!canCoins && !canArtifact)
+                restMsg_ = fmt("Нужно %d монет или %d артефакт. Есть: %d монет, %d артефактов.", run_->reviveCoinCost(),
+                               Run::kReviveArtifactCost, run_->party().coins, run_->artifacts());
+            else {
+                restStage_ = 2;
+                restMsg_.clear();
+            }
         }
         return;
     }
 
-    // restStage_ == 1 — усиление
+    // стадия 2: выбор павшего героя для воскрешения (платная услуга, привал продолжается)
+    if (restStage_ == 2) {
+        std::vector<int> dead;
+        for (int i = 0; i < static_cast<int>(hs.size()) && i < kMaxRoster; ++i)
+            if (!hs[i].alive()) dead.push_back(i);
+        if (IsKeyPressed(KEY_B) || dead.empty()) {
+            restStage_ = 0;
+            return;
+        }
+        const int rk[4] = {KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR};
+        for (int k = 0; k < static_cast<int>(dead.size()); ++k) {
+            const int rx = kGridX + 40, ry = kGridY + 100 + k * 84;
+            const bool onCoin = click && inRect(m, rx + 400, ry + 14, 112, 44);
+            const bool onArtifact = click && inRect(m, rx + 520, ry + 14, 112, 44);
+            const bool rowPick = (k < 4 && IsKeyPressed(rk[k])) || (click && !onCoin && !onArtifact && inRect(m, rx, ry, 640, 72));
+            bool useArtifact = onArtifact, useCoins = onCoin;
+            if (rowPick) {  // клик по строке / клавиша: сначала монеты, если не хватает - артефакт
+                if (run_->party().coins >= run_->reviveCoinCost()) useCoins = true;
+                else useArtifact = true;
+            }
+            if (!useCoins && !useArtifact) continue;
+            bool ok;
+            if (useArtifact) {
+                ok = run_->restReviveArtifact(dead[k]);
+                if (ok) {  // артефакты - постоянная валюта: трата сохраняется сразу
+                    profile_.artifacts = run_->artifacts();
+                    saveProfile();
+                }
+            } else {
+                ok = run_->restRevive(dead[k]);
+            }
+            if (ok)
+                restMsg_ = fmt("%s воскрешён: %d%% здоровья.", hs[dead[k]].name.c_str(),
+                               useArtifact ? Run::kReviveArtifactPct : Run::kRevivePct);
+            else
+                restMsg_ = useArtifact ? "Нет артефактов." : "Не хватает монет.";
+            restStage_ = 0;
+            return;
+        }
+        return;
+    }
+
     const int req = std::min(Run::kBuffTargets, run_->party().aliveCount());
     const int keys[4] = {KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR};
     int picked = 0;
@@ -941,7 +1045,6 @@ void Game::updateRestChoice() {
         for (int i = 0; i < static_cast<int>(hs.size()) && i < kMaxRoster; ++i)
             if (restPick_[i]) idx.push_back(i);
         run_->restBuff(idx);
-        restActionDone_ = true;
         stepTimer_ = 0.f;
     }
 }
@@ -1143,7 +1246,7 @@ void Game::spawnActions() {
                 cf.text = fmt("+%d мон.", h.coins);
                 cf.col = kCoin;
                 cf.size = 18.f;
-                cf.delay = delay;
+                cf.delay = d;
                 cf.fired = true;
                 floaters_.push_back(cf);
             }
@@ -1266,7 +1369,8 @@ void Game::drawBagCell(int x, int y, int size, const Item* it, bool selected, bo
         DrawRectangle(x, y, size, size, selected ? Color{58, 60, 84, 255} : hover ? Color{44, 46, 60, 255} : Color{34, 36, 46, 255});
     if (it) {
         drawItemIcon(*it, x + 6.f, y + 6.f, size - 12.f);
-        drawText(std::string(it->tier, '*'), x + 4.f, y + size - 16.f, 13, tierColor(it->tier));
+        DrawRectangle(x + 1, y + size - 19, size - 2, 18, {0, 0, 0, 150});  // тёмная плашка под звёздами
+        drawStars(x + 4.f, y + size - 10.f, it->tier, 6.5f);
     }
     DrawRectangleLines(x, y, size, size, selected ? kAccent : hover ? Color{200, 200, 215, 255} : (it ? tierColor(it->tier) : kGridLine));
     if (selected) DrawRectangleLines(x + 1, y + 1, size - 2, size - 2, kAccent);
@@ -1278,6 +1382,8 @@ void Game::drawEquipSlot(int x, int y, int size, ItemKind kind, const std::optio
     if (!drawArt("ui/slot.png", fx, fy, fs, fs)) DrawRectangle(x, y, size, size, hover ? Color{44, 46, 60, 255} : Color{36, 38, 50, 255});
     if (item) {
         drawItemIcon(*item, fx + 5.f, fy + 5.f, fs - 10.f);
+        DrawRectangle(x + 1, y + size - 15, size - 2, 14, {0, 0, 0, 150});
+        drawStars(fx + 3.f, fy + fs - 8.f, item->tier, 5.f);
     } else {
         const char* key = kind == ItemKind::Weapon ? "ui/slot_weapon.png" : kind == ItemKind::Armor ? "ui/slot_armor.png" : "ui/slot_relic.png";
         if (!drawArt(key, fx + 5.f, fy + 5.f, fs - 10.f, fs - 10.f)) {
@@ -1293,7 +1399,7 @@ void Game::drawItemTooltip(const Item& it, Vector2 at) const {
     const std::string l1 = it.name;
     const std::string l2 = fmt("%s, ур.%d", itemKindName(it.kind), it.tier);
     const std::string l3 = itemBonusText(it);
-    const float w = std::max({textWidth(l1, 16), textWidth(l2, 13), textWidth(l3, 14)}) + 20.f;
+    const float w = std::max({textWidth(l1, 16), textWidth(l2, 13) + 8.f + it.tier * 15.f, textWidth(l3, 14)}) + 20.f;
     const float h = 66.f;
     float x = at.x + 16.f, y = at.y + 16.f;
     if (x + w > kGridX + kArenaW) x = at.x - w - 8.f;
@@ -1302,6 +1408,7 @@ void Game::drawItemTooltip(const Item& it, Vector2 at) const {
     DrawRectangleLines(static_cast<int>(x), static_cast<int>(y), static_cast<int>(w), static_cast<int>(h), tierColor(it.tier));
     drawText(l1, x + 10.f, y + 6.f, 16, tierColor(it.tier));
     drawText(l2, x + 10.f, y + 28.f, 13, kDim);
+    drawStars(x + 10.f + textWidth(l2, 13) + 8.f, y + 35.f, it.tier, 7.f);
     drawText(l3, x + 10.f, y + 46.f, 14, kAccent);
 }
 
@@ -1428,11 +1535,14 @@ void Game::drawGrid(bool buildMode) {
 }
 
 void Game::draw() {
-    const bool menuBg = screen_ == Screen::MainMenu || screen_ == Screen::Settings;
+    const bool menuBg = screen_ == Screen::MainMenu || screen_ == Screen::Settings || screen_ == Screen::Achievements ||
+                        screen_ == Screen::Legacy;
     drawBackground(menuBg ? "backgrounds/menu.png" : "backgrounds/game.png", 0.f, 0.f, kScreenW, kScreenH);
     switch (screen_) {
         case Screen::MainMenu: drawMainMenu(); break;
         case Screen::Settings: drawSettings(); break;
+        case Screen::Achievements: drawAchievements(); break;
+        case Screen::Legacy: drawLegacy(); break;
         case Screen::Pause:
             drawScreen(prevScreen_);
             drawPause();
@@ -1468,13 +1578,114 @@ void Game::drawButton(int x, int y, int w, int h, const std::string& label, bool
 void Game::drawMainMenu() {
     drawTextCentered("DUNGEON CARDS", kScreenW / 2.f, 90.f, 60, kAccent);
     drawTextCentered("Строй подземелье из карт, веди отряд, победи босса", kScreenW / 2.f, 170.f, 20, kDim);
-    const char* labels[3] = {"Играть", "Настройки", "Выход"};
-    for (int i = 0; i < 3; ++i) {
+
+    // постоянная валюта: артефакты (не сбрасываются между забегами)
+    drawArtifact(kScreenW - 220.f, 36.f, 14.f);
+    drawText(fmt("Артефакты: %d", profile_.artifacts), kScreenW - 198.f, 24.f, 24, Color{190, 150, 255, 255});
+
+    const std::string labels[5] = {"Играть", fmt("Достижения  %d/%d", profile_.unlockedCount(), static_cast<int>(achievements().size())),
+                                   "Наследие", "Настройки", "Выход"};
+    for (int i = 0; i < 5; ++i) {
         const R r = menuBtn(i);
         drawButton(r.x, r.y, r.w, r.h, labels[i], false, true);
     }
+    drawTextCentered(fmt("Побед: %d из %d забегов.   Победа над боссом: +%d артефакта.", profile_.wins, profile_.runs, kBossArtifacts),
+                     kScreenW / 2.f, 662.f, 15, kDim);
     drawTextCentered(fmt("Окно: %dx%d%s", GetScreenWidth(), GetScreenHeight(), IsWindowFullscreen() ? " (полный экран)" : ""),
-                     kScreenW / 2.f, 660.f, 15, kDim);
+                     kScreenW / 2.f, 686.f, 15, kDim);
+}
+
+// Артефакт: иконка ui/artifact.png или шаблон - фиолетовый ромб.
+void Game::drawArtifact(float cx, float cy, float r) const {
+    if (drawArt("ui/artifact.png", cx - r, cy - r, r * 2, r * 2)) return;
+    const Vector2 top{cx, cy - r}, right{cx + r * 0.8f, cy}, bottom{cx, cy + r}, left{cx - r * 0.8f, cy};
+    const Color body{170, 120, 245, 255}, edge{235, 215, 255, 255};
+    DrawTriangle(top, left, right, body);       // обе обмотки: видно при любом отсечении граней
+    DrawTriangle(top, right, left, body);
+    DrawTriangle(bottom, right, left, body);
+    DrawTriangle(bottom, left, right, body);
+    DrawTriangle(top, Vector2{cx - r * 0.25f, cy - r * 0.15f}, Vector2{cx + r * 0.1f, cy - r * 0.35f}, edge);
+    DrawTriangle(top, Vector2{cx + r * 0.1f, cy - r * 0.35f}, Vector2{cx - r * 0.25f, cy - r * 0.15f}, edge);
+}
+
+// ------------------------------------------------------------ достижения
+
+void Game::drawAchievements() {
+    const auto& list = achievements();
+    drawTextCentered("ДОСТИЖЕНИЯ", kScreenW / 2.f, 24.f, 44, kAccent);
+    drawTextCentered(fmt("Получено: %d из %d.   За каждое достижение: +%d артефакта (выдаётся автоматически).", profile_.unlockedCount(),
+                         static_cast<int>(list.size()), kAchievementArtifacts), kScreenW / 2.f, 84.f, 17, kDim);
+    drawArtifact(kScreenW - 220.f, 36.f, 14.f);
+    drawText(fmt("Артефакты: %d", profile_.artifacts), kScreenW - 198.f, 24.f, 24, Color{190, 150, 255, 255});
+
+    const Vector2 m = mouse();
+    (void)m;
+    for (int i = 0; i < static_cast<int>(list.size()); ++i) {
+        const Achievement& a = list[i];
+        const R r = achRow(i);
+        const bool done = profile_.isUnlocked(a.id);
+        DrawRectangle(r.x, r.y, r.w, r.h, done ? Color{30, 44, 36, 255} : kPanel);
+        DrawRectangleLines(r.x, r.y, r.w, r.h, done ? kGood : kGridLine);
+        // отметка выполнения: зелёный квадрат / пустая рамка
+        DrawRectangle(r.x + 10, r.y + 13, 28, 28, done ? kGood : Color{40, 42, 54, 255});
+        DrawRectangleLines(r.x + 10, r.y + 13, 28, 28, done ? kGood : kDim);
+        if (done) drawTextCentered("+", r.x + 24.f, r.y + 14.f, 24, {20, 30, 24, 255});
+        drawText(a.name, r.x + 52.f, r.y + 4.f, 18, done ? kText : kDim);
+        float ty = r.y + 25.f;
+        int lines = 0;
+        for (const auto& l : wrap(a.desc, 460.f, 13)) {
+            if (lines++ >= 2) break;
+            drawText(l, r.x + 52.f, ty, 13, done ? kDim : Color{110, 112, 125, 255});
+            ty += 14.f;
+        }
+        drawArtifact(r.x + r.w - 56.f, r.y + r.h / 2.f, 10.f);
+        drawText(fmt("+%d", a.reward), r.x + r.w - 40.f, r.y + 14.f, 24, done ? Color{190, 150, 255, 255} : kDim);
+    }
+    drawButton(kBackBtn.x, kBackBtn.y, kBackBtn.w, kBackBtn.h, "Назад", false, true);
+}
+
+// ---------------------------------------------------------------- наследие
+
+void Game::drawLegacy() {
+    drawTextCentered("НАСЛЕДИЕ", kScreenW / 2.f, 24.f, 44, kAccent);
+    drawTextCentered("Постоянные улучшения за артефакты. Действуют во всех следующих забегах.", kScreenW / 2.f, 82.f, 17, kDim);
+    drawArtifact(kScreenW - 220.f, 36.f, 14.f);
+    drawText(fmt("Артефакты: %d", profile_.artifacts), kScreenW - 198.f, 24.f, 24, Color{190, 150, 255, 255});
+
+    const Vector2 m = mouse();
+    for (int u = 0; u < kUpgradeCount; ++u) {
+        const UpgradeInfo& info = upgradeInfo(u);
+        const int lv = profile_.meta.level[u];
+        const bool maxed = profile_.meta.maxed(u);
+        const int cost = profile_.meta.nextCost(u);
+        const bool afford = !maxed && profile_.artifacts >= cost;
+        const R c = legacyCard(u);
+        DrawRectangle(c.x, c.y, c.w, c.h, kPanel);
+        DrawRectangleLines(c.x, c.y, c.w, c.h, maxed ? kAccent : lv > 0 ? kGood : kGridLine);
+        drawText(info.name, c.x + 12.f, c.y + 5.f, 20, maxed ? kAccent : kText);
+        drawText(fmt("ур. %d/%d", lv, info.maxLevel), c.x + 330.f, c.y + 8.f, 16, kDim);
+        drawText(info.desc, c.x + 12.f, c.y + 29.f, 13, kDim);
+        std::string eff = "Сейчас: " + upgradeEffect(u, lv);
+        if (!maxed) eff += "     Дальше: " + upgradeEffect(u, lv + 1);
+        drawText(eff, c.x + 12.f, c.y + 47.f, 14, lv > 0 ? kGood : kDim);
+        // полоска уровней
+        for (int k = 0; k < info.maxLevel; ++k)
+            DrawRectangle(c.x + 12 + k * 18, c.y + 68, 14, 6, k < lv ? kGood : Color{50, 52, 64, 255});
+
+        const R b = legacyBuyBtn(u);
+        const bool hover = afford && inR(m, b);
+        DrawRectangle(b.x, b.y, b.w, b.h, maxed ? Color{40, 36, 22, 255} : !afford ? Color{28, 29, 36, 255} : hover ? Color{56, 60, 80, 255} : Color{38, 40, 56, 255});
+        DrawRectangleLines(b.x, b.y, b.w, b.h, maxed ? kAccent : !afford ? kGridLine : hover ? kAccent : Color{190, 150, 255, 255});
+        if (maxed) {
+            drawTextCentered("МАКСИМУМ", b.x + b.w / 2.f, b.y + 16.f, 18, kAccent);
+        } else {
+            drawTextCentered("Улучшить", b.x + b.w / 2.f, b.y + 6.f, 16, afford ? kText : kDim);
+            drawArtifact(b.x + b.w / 2.f - 16.f, b.y + 36.f, 9.f);
+            drawText(fmt("%d", cost), b.x + b.w / 2.f - 2.f, b.y + 26.f, 20, afford ? Color{190, 150, 255, 255} : kDim);
+        }
+    }
+    if (!legacyMsg_.empty()) drawTextCentered(legacyMsg_, kScreenW / 2.f, 636.f, 16, kAccent);
+    drawButton(kBackBtn.x, kBackBtn.y + 6, kBackBtn.w, kBackBtn.h - 8, "Назад", false, true);
 }
 
 void Game::drawPause() {
@@ -1596,11 +1807,6 @@ void Game::drawSelect() {
         for (const auto& l : wrap(roleAbility(h.role), kSelCardW - 36.f, 15)) {
             if (lines++ >= 4) break;
             drawText(l, static_cast<float>(x + 20), ay, 15, kText);
-            ay += 18;
-        }
-        if (h.role == Role::Archer) {
-            drawText(fmt("★ Пассивка: +%d%% монет с врагов", Run::kArcherCoinBonusPct),
-                     static_cast<float>(x + 20), ay, 14, kGood);
             ay += 18;
         }
         if (ch) drawText("ВЫБРАН", x + kSelCardW - 92.f, y + 40.f, 16, kGood);
@@ -1825,6 +2031,7 @@ void Game::drawArena() {
     }
 
     for (const Proj& p : projs_) {
+        if (p.t < 0.f) continue;
         float u = std::min(1.f, p.t / kProjDur);
         float x = p.from.x + (p.to.x - p.from.x) * u;
         float y = p.from.y + (p.to.y - p.from.y) * u;
@@ -1852,38 +2059,51 @@ void Game::drawRestOverlay() {
     if (restStage_ == 0) {
         drawTextCentered("ПРИВАЛ", cx, kGridY + 22.f, 36, kGood);
         drawTextCentered("Отряд отдыхает. Как использовать время?", cx, kGridY + 72.f, 18, kDim);
+        drawCoin(kGridX + 590.f, kGridY + 36.f, 10.f);
+        drawText(fmt("Монеты: %d", run_->party().coins), kGridX + 606.f, kGridY + 24.f, 20, kCoin);
+        drawArtifact(kGridX + 590.f, kGridY + 66.f, 10.f);
+        drawText(fmt("Артефакты: %d", run_->artifacts()), kGridX + 606.f, kGridY + 54.f, 20, Color{190, 150, 255, 255});
 
-        const int bw = 216, bh = 220, by = kGridY + 110;
-        const int gap = 12;
-        const int xs[3] = {
-            kGridX + 16,
-            kGridX + 16 + bw + gap,
-            kGridX + 16 + 2 * (bw + gap),
-        };
+        bool anyDead = false;
+        for (const auto& h : hs) anyDead |= !h.alive();
+        const bool canRevive = anyDead && (run_->party().coins >= run_->reviveCoinCost() || run_->artifacts() >= Run::kReviveArtifactCost);
 
-        const bool canRevive = run_->canRestRevive();
-        const char* titles[3] = {"[1] Лечение группы", "[2] Усиление героев", "[3] Воскрешение"};
+        const int bw = 224, bh = 220, by = kGridY + 130;
+        const char* titles[3] = {"[1] Лечение", "[2] Усиление", "[3] Воскрешение"};
         const std::string descs[3] = {
             fmt("Все живые герои восстанавливают %d%% максимального здоровья.", run_->restHealPct()),
             fmt("Выбери двух героев: каждый получит +%d АТК и +%d ЗАЩ до конца похода.", Run::kBuffAtk, Run::kBuffDef),
-            canRevive
-                ? fmt("Шанс %d%%: случайный павший герой встаёт с %d%% ЗДР. При неудаче привал тратится.",
-                    run_->reviveChancePct(), Run::kReviveHpPct)
-                : std::string("Нет павших героев — воскрешать некого."),
-        };
-        const Color titleCols[3] = {kHeal, kAccent, canRevive ? Color{190, 130, 235, 255} : kDim};
-
+            fmt("Вернуть павшего героя: за %d монет (%d%% ЗДР) или за %d артефакт (%d%% ЗДР). Можно повторять.", run_->reviveCoinCost(),
+                Run::kRevivePct, Run::kReviveArtifactCost, Run::kReviveArtifactPct)};
+        const Color titleCols[3] = {kHeal, kAccent, kCoin};
         for (int k = 0; k < 3; ++k) {
-            const bool enabled = (k != 2) || canRevive;
-            const bool hover = enabled && inRect(m, xs[k], by, bw, bh);
-            DrawRectangle(xs[k], by, bw, bh, hover ? Color{40, 48, 56, 255} : kPanel);
-            DrawRectangleLines(xs[k], by, bw, bh, hover ? kAccent : kGridLine);
-            drawText(titles[k], static_cast<float>(xs[k] + 12), static_cast<float>(by + 16), 18, titleCols[k]);
+            const int bx = kGridX + 14 + k * 236;
+            const bool enabled = k < 2 || canRevive;
+            const bool hover = inRect(m, bx, by, bw, bh);
+            DrawRectangle(bx, by, bw, bh, hover ? Color{40, 48, 56, 255} : kPanel);
+            DrawRectangleLines(bx, by, bw, bh, hover ? (enabled ? kAccent : kBad) : kGridLine);
+            drawText(titles[k], static_cast<float>(bx + 14), static_cast<float>(by + 14), 22, enabled ? titleCols[k] : kDim);
             float ty = static_cast<float>(by + 56);
-            for (const auto& l : wrap(descs[k], bw - 24.f, 15)) {
-                drawText(l, static_cast<float>(xs[k] + 12), ty, 15, enabled ? kText : kDim);
-                ty += 19;
+            for (const auto& l : wrap(descs[k], bw - 28.f, 16)) {
+                drawText(l, static_cast<float>(bx + 14), ty, 16, enabled ? kText : kDim);
+                ty += 21;
             }
+            if (k == 2) {
+                if (!anyDead) drawText("Павших героев нет", static_cast<float>(bx + 14), static_cast<float>(by + bh - 28), 15, kDim);
+                else if (!canRevive) drawText("Не хватает монет и артефактов", static_cast<float>(bx + 14), static_cast<float>(by + bh - 28), 15, kBad);
+                else drawText("Доступно", static_cast<float>(bx + 14), static_cast<float>(by + bh - 28), 15, kGood);
+            }
+        }
+        if (!restMsg_.empty()) drawText(restMsg_, kGridX + 16.f, kGridY + 358.f, 16, kAccent);
+
+        drawText("Состояние отряда", static_cast<float>(kGridX + 30), static_cast<float>(kGridY + 384), 16, kAccent);
+        for (int i = 0; i < static_cast<int>(hs.size()) && i < 4; ++i) {
+            const Hero& h = hs[i];
+            const int hx = kGridX + 30 + i * 172;
+            drawText(h.name, static_cast<float>(hx), static_cast<float>(kGridY + 410), 16, h.alive() ? kText : kDim);
+            drawBar(hx, kGridY + 434, 150, 9, h.maxHp ? static_cast<float>(h.hp) / h.maxHp : 0.f, kGood);
+            drawText(h.alive() ? fmt("%d/%d", h.hp, h.maxHp) : std::string("пал"), static_cast<float>(hx), static_cast<float>(kGridY + 448), 14,
+                     h.alive() ? kDim : kBad);
         }
         drawText("Состояние отряда", static_cast<float>(kGridX + 30), static_cast<float>(kGridY + 380), 16, kAccent);
         for (int i = 0; i < static_cast<int>(hs.size()) && i < 4; ++i) {
@@ -2130,7 +2350,6 @@ void Game::drawRunView() {
     else if (invOpen_) drawInventory();
     else if (r.phase() == RunPhase::BossIntro) drawBossIntro();
     else if (r.phase() == RunPhase::Shop) drawShop();
-    else if (r.phase() == RunPhase::ForgeChoice) drawForge();
 
     DrawRectangle(kPanelX - 10, 10, kPanelW + 20, kScreenH - 20, kPanel);
     float y = 20;
@@ -2149,6 +2368,8 @@ void Game::drawRunView() {
     y += 2;
     drawCoin(kPanelX + 8.f, y + 11.f, 8.f);
     drawText(fmt("Монеты: %d", r.party().coins), kPanelX + 22.f, y + 1.f, 18, kCoin);
+    drawArtifact(kPanelX + 190.f, y + 11.f, 8.f);
+    drawText(fmt("Артефакты: %d", r.artifacts()), kPanelX + 204.f, y + 1.f, 18, Color{190, 150, 255, 255});
     y += 30;
 
     const float logTop = y;
@@ -2174,8 +2395,22 @@ void Game::drawRunView() {
 
 void Game::drawResult() {
     DrawRectangle(0, 0, kScreenW, kScreenH, {0, 0, 0, 150});
-    const int w = 560, h = 300;
-    const int x = (kScreenW - w) / 2, y = (kScreenH - h) / 2;
+
+    // строки награды: артефакты за босса и новые достижения
+    std::vector<std::pair<std::string, Color>> reward;
+    if (run_ && resultWin_) {
+        const Color art{190, 150, 255, 255};
+        reward.push_back({fmt("Артефакты за победу над боссом: +%d", lastReward_.bossArtifacts), art});
+        const auto& all = achievements();
+        for (int id : lastReward_.newAchievements)
+            for (const auto& a : all)
+                if (a.id == id) reward.push_back({fmt("Достижение: %s (+%d)", a.name.c_str(), a.reward), kAccent});
+        reward.push_back({fmt("Всего артефактов: %d", profile_.artifacts), art});
+    }
+
+    const int shown = static_cast<int>(std::min<size_t>(reward.size(), 9));
+    const int w = 620, h = 330 + (run_ && resultWin_ ? 22 + shown * 26 : 0);
+    const int x = (kScreenW - w) / 2, y = std::max(10, (kScreenH - h) / 2);
     DrawRectangle(x, y, w, h, kPanel);
     DrawRectangleLines(x, y, w, h, resultWin_ ? kGood : kBad);
     drawTextCentered(resultWin_ ? "ПОБЕДА!" : "ПОРАЖЕНИЕ", kScreenW / 2.f, y + 20.f, 40, resultWin_ ? kGood : kBad);
@@ -2188,10 +2423,16 @@ void Game::drawResult() {
         ty += 30;
         drawTextCentered(fmt("Предметов добыто: %d", static_cast<int>(run_->loot().size())), kScreenW / 2.f, ty, 22, kText);
         ty += 30;
-        drawTextCentered(fmt("Героев выжило: %d из %d", run_->party().aliveCount(),
-                             static_cast<int>(run_->party().heroes.size())), kScreenW / 2.f, ty, 22, kText);
+        drawTextCentered(fmt("Героев выжило: %d из %d    Потерь за забег: %d", run_->party().aliveCount(),
+                             static_cast<int>(run_->party().heroes.size()), run_->casualties()), kScreenW / 2.f, ty, 22, kText);
         ty += 30;
         drawTextCentered(fmt("Монет в кармане: %d", run_->party().coins), kScreenW / 2.f, ty, 22, kCoin);
+        ty += 36;
+        for (int i = 0; i < shown; ++i) {
+            drawTextCentered(reward[i].first, kScreenW / 2.f, ty, 19, reward[i].second);
+            ty += 26;
+        }
+        if (!resultWin_) drawTextCentered("Артефакты дают только победы над боссами.", kScreenW / 2.f, ty, 16, kDim);
     } else {
         for (const auto& l : wrap(resultText_, w - 40.f, 20)) {
             drawTextCentered(l, kScreenW / 2.f, ty, 20, kText);

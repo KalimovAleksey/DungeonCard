@@ -43,7 +43,7 @@ std::vector<Enemy> makeEnemies(int d, Rng& rng, int floor) {
         e.def = s.def + (floor - 1); // +1 DEF за этаж
         e.spd = s.spd;
         e.slot = i;
-        e.coins = rng.range(s.coinMin, s.coinMax);
+        e.coins = rng.range(s.coinMin, s.coinMax) * (100 + std::max(0, coinBonusPct)) / 100;
         e.art = enemyArt(keys[d - 1][pick]);
         out.push_back(e);
     }
@@ -320,14 +320,21 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
         for (auto& o : party_.heroes)
             if (o.inFight() && o.hp * 100 < o.maxHp * 75) anyHurt = true;
         if (anyHurt) {
+            // Цепное лечение: случайная цель +4, следующая +3, затем +2, +1 ... (все члены отряда),
+            // к каждой порции добавляется 50% защиты друида.
+            std::vector<int> targets;
+            for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j)
+                if (party_.heroes[j].inFight()) targets.push_back(j);
+            rng_.shuffle(targets);
             act.kind = CombatAction::Heal;
-            for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j) {
-                if (!party_.heroes[j].inFight()) continue;
-                int gained = healHero(j, 2);
-                if (gained > 0) act.hits.push_back({true, j, gained, true, false, false});
+            const int bonus = h.def / 2;
+            for (size_t k = 0; k < targets.size(); ++k) {
+                const int amount = std::max(1, 4 - static_cast<int>(k)) + bonus;
+                const int gained = healHero(targets[k], amount);
+                if (gained > 0) act.hits.push_back({true, targets[k], gained, true, false, false});
             }
             events_.push_back(act);
-            log.push_back(fmt("%s: целебный дождь", h.name.c_str()));
+            log.push_back(fmt("%s: цепное лечение (%d целей)", h.name.c_str(), static_cast<int>(act.hits.size())));
             return;
         }
     }
@@ -361,39 +368,23 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
         if (dead) killed.push_back(ei);
     };
 
-        switch (h.role) {
+    switch (h.role) {
         case Role::Mage:
             act.kind = CombatAction::Ranged;
             hit(order[0], h.atk, true, true);
             break;
         case Role::Archer:
             act.kind = CombatAction::Ranged;
-            for (size_t k = 0; k < order.size() && k < 2; ++k) hit(order[k], h.atk * 8 / 10, false, true);
+            if (order.size() == 1) {
+                hit(order[0], h.atk, false, true);  // единственная цель: один выстрел, полный урон
+            } else {
+                for (size_t k = 0; k < 2; ++k) hit(order[k], h.atk * 8 / 10, false, true);  // залп по двум: 80%
+            }
             break;
         case Role::Berserker: {
             bool rage = h.hp * 2 < h.maxHp;
             act.kind = CombatAction::Melee;
             hit(order[0], h.atk * (rage ? 3 : 2) / 2, false, false);
-            break;
-        }
-        case Role::Bard: {
-            // Бард ищет лучшего бойца (с максимальным АТК) и дает ему бафф
-            int bestAlly = -1;
-            for (int j = 0; j < (int)party_.heroes.size(); ++j) {
-                if (j == i || !party_.heroes[j].inFight()) continue;
-                if (bestAlly < 0 || party_.heroes[j].atk > party_.heroes[bestAlly].atk) bestAlly = j;
-            }
-            if (bestAlly >= 0) {
-                int bonusAtk = h.atk / 2;
-                party_.heroes[bestAlly].buffAtkCombat += bonusAtk;   // <-- было buffAtk
-                party_.heroes[bestAlly].recalc();
-                
-                act.kind = CombatAction::Effect;
-                act.hits.push_back({true, bestAlly, bonusAtk, true, false, false}); // Используем heal для отрисовки "+X"
-                events_.push_back(act);
-                log.push_back(fmt("%s вдохновляет %s: +%d АТК!", h.name.c_str(), party_.heroes[bestAlly].name.c_str(), bonusAtk));
-                return;
-            }
             break;
         }
         default:
@@ -469,7 +460,7 @@ void Combat::onEnemyDeath(int ei, std::vector<std::string>& log) {
             c.name = g == 1 ? "Слизень" : "Слизнёнок";
             c.bossId = BossSlime;
             c.gen = g;
-            c.maxHp = c.hp = g == 1 ? 110 : 55;
+            c.maxHp = c.hp = g == 1 ? 157 : 79;
             c.atk = g == 1 ? 12 : 9;
             c.def = g == 1 ? 1 : 0;
             c.spd = 4 + g;
@@ -490,6 +481,12 @@ void Combat::onEnemyDeath(int ei, std::vector<std::string>& log) {
 
 int Combat::hurtHero(int ei, int target, int dmg, CombatAction& act, std::vector<std::string>& log) {
     Hero& h = party_.heroes[target];
+    if (dmgReducePct_ > 0) {
+        // снижение на pct% с вероятностным округлением: в среднем ровно pct%, без «лишнего» очка с каждого удара
+        int cut = dmg * dmgReducePct_ / 100;
+        if (rng_.range(0, 99) < dmg * dmgReducePct_ % 100) ++cut;
+        dmg = std::max(1, dmg - cut);
+    }
     h.hp -= dmg;
     act.hits.push_back({true, target, dmg, false, false, !h.alive()});
     log.push_back(fmt("%s > %s: -%d%s", enemies_[ei].name.c_str(), h.name.c_str(), dmg, h.alive() ? "" : " - пал"));

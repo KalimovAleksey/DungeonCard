@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
-//test_commit
+
 namespace dc {
 
 // Идентификаторы финальных боссов.
