@@ -1,8 +1,10 @@
 // Печатает таблицу картинок, которые можно подложить в assets/ (Markdown).
 #include <cstdio>
 #include "core/Assets.h"
+#include "core/ConsoleUtf8.h"
 
 int main() {
+    dc::enableUtf8Console();
     std::string group;
     for (const auto& a : dc::assetManifest()) {
         if (a.group != group) {

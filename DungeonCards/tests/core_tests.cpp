@@ -1,7 +1,9 @@
 #include <cstdio>
 #include <cstdlib>
+#include <cstdio>
 #include <set>
 #include "core/Assets.h"
+#include "core/ConsoleUtf8.h"
 #include "core/Run.h"
 
 using namespace dc;
@@ -29,6 +31,7 @@ static Hero tough(const char* name, Role r, int atk) {
 }
 
 int main() {
+    dc::enableUtf8Console();
     // ---------------------------------------------------------- двери и карты
     CHECK(rotateDoors(doorBit(North), 1) == doorBit(East));
     CHECK(rotateDoors(doorBit(West), 1) == doorBit(North));
@@ -284,6 +287,134 @@ int main() {
         CHECK(skeletons >= 1 && skeletons <= 3);
     }
 
+    // ------------------------------------------------------------- лучник
+    {
+        auto target = [](int hp, int def) {
+            Enemy e;
+            e.name = "Мишень";
+            e.maxHp = e.hp = hp;
+            e.atk = 1;
+            e.def = def;
+            e.spd = 1;
+            return e;
+        };
+        auto archerHits = [&](std::vector<Enemy> enemies) {
+            Rng rr(1);
+            Party party;
+            party.heroes = {tough("Лучник", Role::Archer, 10)};
+            Combat cb(party, std::move(enemies), rr);
+            std::vector<std::string> lg;
+            for (int i = 0; i < 20; ++i) {
+                cb.step(lg);
+                for (auto& a : cb.events())
+                    if (a.actorHero && a.kind == CombatAction::Ranged) {
+                        std::vector<int> dmg;
+                        for (auto& h : a.hits) dmg.push_back(h.amount);
+                        return dmg;
+                    }
+            }
+            return std::vector<int>{};
+        };
+        auto one = archerHits({target(5000, 1)});
+        CHECK(one.size() == 1 && one[0] == 10 - 1);                       // одна цель: один выстрел, 100%
+        auto two = archerHits({target(5000, 1), target(5000, 1)});
+        CHECK(two.size() == 2 && two[0] == 8 - 1 && two[1] == 8 - 1);     // две цели: по 80%
+        auto three = archerHits({target(5000, 1), target(5000, 1), target(5000, 1)});
+        CHECK(three.size() == 2);                                         // больше двух не бьёт
+    }
+
+    // -------------------------------------------------- друид: цепное лечение
+    {
+        for (int bonusDef = 0; bonusDef <= 6; bonusDef += 3) {
+            Rng rr(8);
+            Party party;
+            Hero druid = tough("Друид", Role::Druid, 4);
+            druid.baseDef = druid.def = bonusDef;
+            party.heroes = {druid, tough("А", Role::Warrior, 6), tough("Б", Role::Warrior, 6), tough("В", Role::Warrior, 6)};
+            for (auto& h : party.heroes) h.hp = 20;                       // все ранены (макс. 900)
+            Enemy e;
+            e.name = "Мишень"; e.maxHp = e.hp = 100000; e.atk = 1; e.def = 50; e.spd = 1;
+            Combat cb(party, {e}, rr);
+            std::vector<std::string> lg;
+            std::vector<int> amounts, targets;
+            for (int i = 0; i < 40 && amounts.empty(); ++i) {
+                cb.step(lg);
+                for (auto& a : cb.events())
+                    if (a.actorHero && a.actor == 0 && a.kind == CombatAction::Heal)
+                        for (auto& h : a.hits) { amounts.push_back(h.amount); targets.push_back(h.idx); }
+            }
+            const int bonus = bonusDef / 2;
+            CHECK(amounts.size() == 4);                                   // все четверо членов отряда
+            if (amounts.size() == 4) {
+                CHECK(amounts[0] == 4 + bonus && amounts[1] == 3 + bonus && amounts[2] == 2 + bonus && amounts[3] == 1 + bonus);
+                std::set<int> uniq(targets.begin(), targets.end());
+                CHECK(uniq.size() == 4);                                  // каждая цель по разу
+            }
+        }
+    }
+
+    // --------------------------------------- ловушки: два разных героя, вор -> 50-60%
+    {
+        auto trapRun = [&](bool withRogue, int aliveCount, int seed) {
+            Dungeon d;
+            d.place(card(RoomType::Trap, 2, doorBit(West)), {s.x + 1, s.y});
+            std::vector<Hero> squad = {tough("Воин", Role::Warrior, 8), tough("Маг", Role::Mage, 8),
+                                       tough(withRogue ? "Вор" : "Жрица", withRogue ? Role::Rogue : Role::Cleric, 8),
+                                       tough("Паладин", Role::Paladin, 8)};
+            for (int i = aliveCount; i < 4; ++i) squad[i].hp = 0;
+            Run r(d, seed, squad);
+            r.move(East);
+            std::vector<int> lost;
+            for (auto& h : r.party().heroes) lost.push_back(h.alive() || h.hp < 0 ? 900 - h.hp : 0);
+            return lost;
+        };
+        for (int seed = 0; seed < 60; ++seed) {
+            auto lost = trapRun(false, 4, seed);          // без вора: полный урон 10, ровно двое разных
+            int hurt = 0;
+            for (int l : lost) { if (l > 0) { ++hurt; CHECK(l == 10); } }
+            CHECK(hurt == 2);
+
+            auto lostR = trapRun(true, 4, seed);          // с вором: 5-6 вместо 10, всё равно двое разных
+            int hurtR = 0;
+            for (int l : lostR) { if (l > 0) { ++hurtR; CHECK(l >= 5 && l <= 6); } }
+            CHECK(hurtR == 2);
+
+            auto lostOne = trapRun(false, 1, seed);       // жив один: бьют только его, один раз
+            int total = 0, hurtOne = 0;
+            for (int l : lostOne) if (l > 0 && l < 900) { total += l; ++hurtOne; }
+            CHECK(hurtOne <= 1 && total <= 10);
+        }
+    }
+
+    // -------------------------------------------------- воскрешение на привале
+    {
+        Dungeon d;
+        d.place(card(RoomType::Rest, 1, doorBit(West)), {s.x + 1, s.y});
+        std::vector<Hero> squad = {makeHero("Воин", Role::Warrior, 40, 8, 3, 4), makeHero("Маг", Role::Mage, 26, 11, 1, 5),
+                                   makeHero("Жрица", Role::Cleric, 30, 5, 2, 3), makeHero("Вор", Role::Rogue, 28, 9, 2, 7)};
+        squad[0].hp = 0;
+        squad[1].hp = 0;
+        Run r(d, 2, squad);
+        CHECK(!r.restRevive(0));                       // вне привала нельзя
+        CHECK(r.move(East));
+        CHECK(r.phase() == RunPhase::RestChoice);
+        CHECK(!r.restRevive(0));                       // нет монет
+        r.grantCoins(120);
+        CHECK(!r.restRevive(3));                       // живого воскрешать нельзя
+        CHECK(!r.restRevive(9));
+        CHECK(r.restRevive(0));
+        CHECK(r.party().coins == 120 - Run::kReviveCost);
+        CHECK(r.party().heroes[0].alive() && r.party().heroes[0].hp == 40 * Run::kRevivePct / 100);
+        CHECK(r.phase() == RunPhase::RestChoice);      // привал продолжается: можно выбрать лечение/бафф
+        CHECK(r.restRevive(1));
+        CHECK(r.party().coins == 120 - 2 * Run::kReviveCost);
+        CHECK(r.party().heroes[1].hp == 13);
+        CHECK(!r.restRevive(0));                       // уже жив
+        r.restHeal();
+        CHECK(r.phase() == RunPhase::Exploring);
+        CHECK(r.party().heroes[0].hp == 20 + 40 * Run::kRestHealPct / 100);   // воскрешённый лечится как все
+    }
+
     // --------------------------------------------------- вампиризм и крит от реликвий
     {
         Rng rng(6);
@@ -405,6 +536,191 @@ int main() {
             for (int i = 0; i < 100; ++i)
                 for (auto& e : makeEnemies(d, rr)) CHECK(paths.count(e.art) > 0);
         for (auto& a : assetManifest()) CHECK(a.w > 0 && a.h > 0 && !a.desc.empty());
+    }
+
+    // ---------------------------------------------------------- Наследие
+    {
+        for (int u = 0; u < kUpgradeCount; ++u) {
+            const UpgradeInfo& info = upgradeInfo(u);
+            CHECK(!info.name.empty() && !info.desc.empty());
+            CHECK(info.maxLevel > 0 && static_cast<int>(info.costs.size()) == info.maxLevel);
+            for (int c : info.costs) CHECK(c > 0);
+            CHECK(upgradeEffect(u, 0) == "нет" && !upgradeEffect(u, 1).empty());
+        }
+        Meta m;
+        CHECK(m.reviveCoinCost() == 50 && m.restHealPct() == 40 && m.startCoins() == 0);
+        CHECK(m.nextCost(UpVitality) == 8 && !m.maxed(UpVitality));
+        m.level[UpLife] = 3;
+        CHECK(m.reviveCoinCost() == 26);
+        m.level[UpVitality] = 2;
+        CHECK(m.maxed(UpVitality) && m.nextCost(UpVitality) == 0);
+
+        Hero h = makeHero("Воин", Role::Warrior, 40, 8, 3, 4);
+        Meta mm;
+        mm.level[UpVitality] = 2;
+        mm.level[UpMight] = 4;
+        mm.level[UpArmor] = 5;
+        mm.applyToHero(h);
+        CHECK(h.maxHp == 42 && h.hp == 42 && h.atk == 8 && h.def == 3);
+        CHECK(h.critPct == 8 && mm.damageReducePct() == 5);
+        h.relic = gear(ItemKind::Relic, 1, 8, RelicEffect::Keen);   // крит реликвии и Наследия складываются
+        h.recalc();
+        CHECK(h.critPct == 16);
+    }
+
+    // ------------------------------------------- профиль: артефакты и достижения
+    {
+        CHECK(achievements().size() == 18);
+        std::set<int> ids;
+        for (auto& a : achievements()) { ids.insert(a.id); CHECK(a.reward == kAchievementArtifacts && !a.name.empty() && !a.desc.empty()); }
+        CHECK(ids.size() == 18);
+
+        Profile p;
+        RunSummary s;
+        s.victory = true;
+        s.bossId = BossArchmage;
+        s.squad = {Role::Warrior, Role::Mage, Role::Cleric, Role::Rogue};
+        s.casualties = 0;
+        s.aliveAtEnd = 4;
+        RunReward r = p.recordRun(s);
+        CHECK(r.bossArtifacts == kBossArtifacts);
+        CHECK(r.newAchievements.size() == 6);                       // босс + 4 героя + «без потерь»
+        CHECK(r.achievementArtifacts == 6 * kAchievementArtifacts);
+        CHECK(p.artifacts == 2 + 18 && p.artifactsEarned == 20 && p.unlockedCount() == 6);
+        CHECK(p.isUnlocked(BossArchmage) && p.isUnlocked(100 + static_cast<int>(Role::Mage)) && p.isUnlocked(200));
+        CHECK(!p.isUnlocked(201));
+
+        RunReward again = p.recordRun(s);                           // повторная победа: только за босса
+        CHECK(again.total() == kBossArtifacts && again.newAchievements.empty() && p.artifacts == 22);
+
+        RunSummary lost = s;
+        lost.victory = false;                                       // поражение артефактов не даёт
+        RunReward none = p.recordRun(lost);
+        CHECK(none.total() == 0 && p.artifacts == 22 && p.runs == 3 && p.wins == 2);
+
+        RunSummary last = s;                                        // победа с одним выжившим
+        last.bossId = BossDragon;
+        last.casualties = 3;
+        last.aliveAtEnd = 1;
+        RunReward lr = p.recordRun(last);
+        CHECK(lr.newAchievements.size() == 2);                      // дракон + «последний герой»
+        CHECK(p.isUnlocked(BossDragon) && p.isUnlocked(201));
+        CHECK(lr.total() == kBossArtifacts + 2 * kAchievementArtifacts);
+
+        // потеря воскрешённого героя тоже мешает достижению «без потерь»
+        Profile q;
+        RunSummary lossy = s;
+        lossy.casualties = 1;
+        RunReward lrw = q.recordRun(lossy);
+        CHECK(!q.isUnlocked(200) && lrw.newAchievements.size() == 5);
+
+        // артефакты постоянны: сохраняются и читаются из файла
+        p.meta.level[UpGreed] = 2;
+        const std::string path = "core_tests_profile.tmp";
+        CHECK(p.saveFile(path));
+        Profile loaded = Profile::loadFile(path);
+        std::remove(path.c_str());
+        CHECK(loaded.artifacts == p.artifacts && loaded.artifactsEarned == p.artifactsEarned);
+        CHECK(loaded.unlocked == p.unlocked && loaded.meta.level == p.meta.level);
+        CHECK(loaded.runs == p.runs && loaded.wins == p.wins && loaded.bossWins == p.bossWins && loaded.heroWins == p.heroWins);
+        CHECK(Profile::loadFile("нет_такого_файла.tmp").artifacts == 0);
+
+        // мусор и «подкрученные» значения не ломают профиль
+        Profile bad = Profile::parse("artifacts -5\nmeta 99 99 99 99 99 99 99 99 99 99 99\nunlocked 7 999 -3\nмусор\n");
+        CHECK(bad.artifacts == 0 && bad.isUnlocked(7) && !bad.isUnlocked(999));
+        for (int u = 0; u < kUpgradeCount; ++u) CHECK(bad.meta.level[u] == upgradeInfo(u).maxLevel);
+
+        // покупка улучшений
+        Profile b;
+        CHECK(!b.buyUpgrade(UpVitality));                           // нет артефактов
+        b.artifacts = 100;
+        int spent = 0;
+        while (b.buyUpgrade(UpVitality)) spent += 1;
+        CHECK(b.meta.level[UpVitality] == 2 && spent == 2);
+        CHECK(b.artifacts == 100 - (8 + 14));
+        CHECK(!b.buyUpgrade(UpVitality) && !b.buyUpgrade(-1) && !b.buyUpgrade(99));
+    }
+
+    // ------------------------------------- забег: артефакты и эффекты Наследия
+    {
+        Dungeon d;
+        d.place(card(RoomType::Rest, 1, doorBit(West)), {s.x + 1, s.y});
+        std::vector<Hero> squad = {makeHero("Воин", Role::Warrior, 40, 8, 3, 4), makeHero("Маг", Role::Mage, 26, 11, 1, 5),
+                                   makeHero("Жрица", Role::Cleric, 30, 5, 2, 3), makeHero("Вор", Role::Rogue, 28, 9, 2, 7)};
+        squad[0].hp = 0;
+        squad[1].hp = 0;
+        RunOptions opt;
+        opt.artifacts = 2;
+        opt.meta.level[UpCamp] = 2;
+        Run r(d, 1, squad, opt);
+        CHECK(r.artifacts() == 2 && !r.restReviveArtifact(0));      // вне привала нельзя
+        CHECK(r.move(East));
+        CHECK(r.restReviveArtifact(0));
+        CHECK(r.artifacts() == 1);
+        CHECK(r.party().heroes[0].hp == 40 * Run::kReviveArtifactPct / 100);   // 75% здоровья
+        CHECK(r.party().coins == 0);                                // монеты не тронуты
+        CHECK(!r.restReviveArtifact(2));                            // живого воскрешать нельзя
+        CHECK(r.restReviveArtifact(1));
+        CHECK(r.artifacts() == 0);
+        CHECK(!r.restReviveArtifact(1));
+        CHECK(r.phase() == RunPhase::RestChoice);                   // привал продолжается
+        CHECK(r.restHealPct() == 50);                               // «Уютный лагерь»
+        const int hp2 = r.party().heroes[2].hp;
+        r.restHeal();
+        CHECK(r.party().heroes[2].hp == std::min(30, hp2 + 30 * 50 / 100));
+        CHECK(r.casualties() == 2);                                 // воскрешённые остаются в потерях
+        CHECK(r.summary().casualties == 2 && r.summary().aliveAtEnd == 4 && !r.summary().victory);
+    }
+    {
+        RunOptions opt;
+        opt.meta.level[UpPurse] = 2;
+        opt.meta.level[UpProvisions] = 2;
+        opt.meta.level[UpHaggler] = 4;
+        opt.meta.level[UpLife] = 3;
+        Dungeon d;
+        d.place(card(RoomType::Shop, 0, doorBit(West) | doorBit(East)), {s.x + 1, s.y});
+        Run r(d, 4, {}, opt);
+        CHECK(r.party().coins == 30);                               // «Походный кошелёк»
+        CHECK(r.party().bag.size() == 2 && r.party().potionCount() == 2);   // «Дар предков»: 2 зелья т1
+        for (auto& it : r.party().bag) CHECK(it.tier == 1);
+        CHECK(r.reviveCoinCost() == 26);
+        CHECK(r.move(East));
+        for (auto& o : *r.shopStock()) CHECK(o.price == std::max(1, itemPrice(o.item) * 80 / 100));   // -20% цен
+    }
+    {   // «Закалённые доспехи»: меньше урона по героям
+        auto totalDamage = [&](int reduce) {
+            Rng rr(10);
+            Party party;
+            party.heroes = {tough("Воин", Role::Warrior, 1)};
+            Enemy e;
+            e.name = "Бьющий"; e.maxHp = e.hp = 100000; e.atk = 50; e.def = 99; e.spd = 9;
+            Combat cb(party, {e}, rr);
+            cb.setDamageReduction(reduce);
+            std::vector<std::string> lg;
+            for (int i = 0; i < 40; ++i) cb.step(lg);
+            return 900 - party.heroes[0].hp;
+        };
+        const int plain = totalDamage(0), reduced = totalDamage(30);
+        CHECK(plain > 0 && reduced > 0 && reduced < plain);
+    }
+    {
+        Rng rr(3);
+        int plain = 0, rich = 0;
+        for (int i = 0; i < 50; ++i) {
+            for (auto& e : makeEnemies(2, rr, 0)) { plain += e.coins; CHECK(e.coins >= 7 && e.coins <= 11); }
+            for (auto& e : makeEnemies(2, rr, 50)) { rich += e.coins; CHECK(e.coins >= 7 * 150 / 100 && e.coins <= 11 * 150 / 100); }
+        }
+        CHECK(rich > plain);                                        // «Охотник за трофеями»
+    }
+    {   // потери считаются, даже если герой погиб в ловушке
+        Dungeon d;
+        d.place(card(RoomType::Trap, 1, doorBit(West)), {s.x + 1, s.y});
+        std::vector<Hero> squad;
+        for (int i = 0; i < 4; ++i) { Hero h = makeHero("Г", Role::Warrior, 40, 8, 3, 4); h.hp = 1; squad.push_back(h); }
+        Run r(d, 6, squad);
+        r.move(East);
+        CHECK(r.casualties() == 2 && r.party().aliveCount() == 2);
+        CHECK(r.summary().casualties == 2 && r.summary().aliveAtEnd == 2);
     }
 
     // --------------------------------------------------- колода и боссы

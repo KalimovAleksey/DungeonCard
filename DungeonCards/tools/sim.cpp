@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <functional>
 #include <set>
+#include "core/ConsoleUtf8.h"
 #include "core/Run.h"
 
 using namespace dc;
@@ -149,7 +150,7 @@ static Dir dirTo(Vec2i a, Vec2i b) {
 struct Result { bool win = false; int cleared = 0; bool reachedBoss = false; bool shopConnected = false; };
 
 static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems, int buildPolicy,
-                      const std::vector<int>* fixedTeam = nullptr) {
+                      const std::vector<int>* fixedTeam = nullptr, const Meta* meta = nullptr) {
     Rng rng(1000 + seed);
     Deck deck(rng, bossId);
     Dungeon dg;
@@ -167,7 +168,7 @@ static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems,
             default: return 0;
         }
     };
-    for (int left = 12; left > 0; --left) {
+    for (int left = 12 + (meta ? meta->extraPlacements() : 0); left > 0; --left) {
         std::vector<int> order;
         for (int i = 0; i < 4; ++i) if (has[i]) order.push_back(i);
         std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return score(hand[a], left) > score(hand[b], left); });
@@ -204,7 +205,12 @@ static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems,
         for (int i = 0; i < 4; ++i) squad.push_back(roster[ids[i]]);
     }
 
-    Run run(dg, 5000 + seed, squad);
+    RunOptions options;
+    if (meta) {
+        options.meta = *meta;
+        for (auto& h : squad) meta->applyToHero(h);
+    }
+    Run run(dg, 5000 + seed, squad, options);
     bool reached = false;
     std::set<Vec2i> lateShops;
     for (int guard = 0; !run.finished() && guard < 40000; ++guard) {
@@ -212,6 +218,17 @@ static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems,
         switch (run.phase()) {
             case RunPhase::RestChoice: {
                 const Party& p = run.party();
+                if (smartItems) {  // умный игрок тратит накопленные монеты на воскрешение сильнейших павших героев
+                    for (int tries = 0; tries < 4; ++tries) {
+                        int dead = -1;
+                        for (int i = 0; i < (int)p.heroes.size(); ++i)
+                            if (!p.heroes[i].alive() &&
+                                (dead < 0 || weight(p.heroes[i], Item{"", ItemKind::Weapon, 1, 1}) > weight(p.heroes[dead], Item{"", ItemKind::Weapon, 1, 1})))
+                                dead = i;
+                        if (dead < 0 || p.coins < Run::kReviveCost) break;
+                        run.restRevive(dead);
+                    }
+                }
                 if (p.totalHp() * 100 < p.totalMaxHp() * 70) {
                     run.restHeal();
                 } else {
@@ -309,12 +326,43 @@ static void searchTeams(int games, int policy) {
     }
 }
 
+// Вклад каждого улучшения «Наследия» на максимальном уровне (наивная и умная игра).
+static void metaImpact(int games, int policy) {
+    auto rate = [&](bool smart, const Meta* meta) {
+        int w = 0, p = 0;
+        for (int g = 0; g < games; ++g) {
+            Result r = playOne(g, g % kBossCount, smart, smart, policy, nullptr, meta);
+            if (r.cleared < 0) continue;
+            ++p;
+            if (r.win) ++w;
+        }
+        return 100.0 * w / std::max(1, p);
+    };
+    const double base0 = rate(false, nullptr), base1 = rate(true, nullptr);
+    std::printf("Без Наследия: наивно %.1f%%, умно %.1f%%\n\n", base0, base1);
+    for (int u = 0; u < kUpgradeCount; ++u) {
+        Meta m;
+        m.level[u] = upgradeInfo(u).maxLevel;
+        std::printf("  %-22s (макс. ур.%d)  наивно %+5.1f  умно %+5.1f\n", upgradeInfo(u).name.c_str(), upgradeInfo(u).maxLevel,
+                    rate(false, &m) - base0, rate(true, &m) - base1);
+    }
+}
+
 int main(int argc, char** argv) {
+    dc::enableUtf8Console();
     int games = argc > 1 ? std::atoi(argv[1]) : 1600;
     int policy = argc > 2 ? std::atoi(argv[2]) : 0;
-    if (argc > 3) { searchTeams(games, policy); return 0; }
+    if (argc > 3 && std::string(argv[3]) == "search") { searchTeams(games, policy); return 0; }
+    if (argc > 3 && std::string(argv[3]) == "impact") { metaImpact(games, policy); return 0; }
+    // argv[4]: прокачка «Наследия»: 0 - нет, 1 - половина уровней, 2 - максимум
+    const int metaMode = argc > 4 ? std::atoi(argv[4]) : (argc > 3 ? std::atoi(argv[3]) : 0);
+    Meta metaCfg;
+    for (int u = 0; u < kUpgradeCount; ++u)
+        metaCfg.level[u] = metaMode == 0 ? 0 : metaMode == 1 ? (upgradeInfo(u).maxLevel + 1) / 2 : upgradeInfo(u).maxLevel;
+    const Meta* metaPtr = metaMode == 0 ? nullptr : &metaCfg;
     const char* policyNames[3] = {"случайная расстановка комнат", "жадная (только сложные)", "осторожная (лёгкие + отдых)"};
-    std::printf("Расстановка: %s, партий на ячейку: %d\n\n", policyNames[policy], games);
+    std::printf("Расстановка: %s, партий на ячейку: %d, прокачка Наследия: %s\n\n", policyNames[policy], games,
+                metaMode == 0 ? "нет" : metaMode == 1 ? "половина" : "максимум");
 
     struct Cfg { const char* name; bool team, items; };
     const Cfg cfgs[4] = {
@@ -331,7 +379,7 @@ int main(int argc, char** argv) {
     for (int c = 0; c < 4; ++c)
         for (int g = 0; g < games; ++g) {
             int boss = g % kBossCount;
-            Result r = playOne(g, boss, cfgs[c].team, cfgs[c].items, policy);
+            Result r = playOne(g, boss, cfgs[c].team, cfgs[c].items, policy, nullptr, metaPtr);
             if (r.cleared < 0) continue;  // босс не удалось разместить
             ++played[c][boss];
             if (r.win) ++wins[c][boss];
