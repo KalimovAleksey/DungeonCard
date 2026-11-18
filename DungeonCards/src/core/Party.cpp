@@ -14,7 +14,6 @@ const char* roleTitle(Role r) {
         case Role::Paladin:   return "Защитник-целитель";
         case Role::Berserker: return "Яростный боец";
         case Role::Druid:     return "Лекарь группы";
-        case Role::Bard:      return "Вдохновитель";
     }
     return "";
 }
@@ -22,14 +21,13 @@ const char* roleTitle(Role r) {
 const char* roleAbility(Role r) {
     switch (r) {
         case Role::Warrior:   return "Провокация: враги чаще целятся в него. Надёжная опора отряда.";
-        case Role::Mage:      return "Магия: игнорирует половину защиты врага. Пассивно: зелья лечат на 50% сильнее.";
-        case Role::Cleric:    return "Исцеление: лечит самого раненого союзника (АТК+3). Пассивно: шанс воскрешения на привале +25% (до 50%).";
-        case Role::Rogue:     return "Критический удар: 25% шанс удвоить урон. Обезвреживает ловушки.";
-        case Role::Archer:    return "Залп: каждая атака бьёт двух врагов с 80% урона. Пассивно: +25% монет с врагов, пока жив.";
-        case Role::Paladin:   return "Провокация: после атаки лечит раненого на 2. Пассивно: привал лечит на 40% вместо 20%.";
+        case Role::Mage:      return "Магия: игнорирует половину защиты врага.";
+        case Role::Cleric:    return "Исцеление: на своём ходу лечит самого раненого союзника (АТК+3).";
+        case Role::Rogue:     return "Критический удар: 25% шанс удвоить урон. Замечает ловушки: их урон по отряду снижается до 50-60%.";
+        case Role::Archer:    return "Залп: бьёт двух врагов с 80% урона, а единственную цель - одним выстрелом со 100% урона.";
+        case Role::Paladin:   return "Провокация и благословение: после атаки лечит самого раненого на 2.";
         case Role::Berserker: return "Ярость: +50% урона, когда здоровье ниже половины.";
-        case Role::Druid:     return "Целебный дождь: если кто-то ранен, лечит всех союзников на 2.";
-        case Role::Bard:      return "Вдохновение: усиливает союзника на половину своей АТК. Пассивно: скидка у торговца 15%.";
+        case Role::Druid:     return "Цепное лечение: лечит случайного союзника на 4 + 50% своей ЗАЩ, следующего на 3, затем на 2 и 1 - всех членов отряда.";
     }
     return "";
 }
@@ -74,10 +72,10 @@ void Hero::recalc() {
         hp = std::max(1, std::min(hp, newMax));
     }
     maxHp = newMax;
-    atk = baseAtk + buffAtk + buffAtkCombat + atkB;
+    atk = baseAtk + buffAtk + atkB;
     def = baseDef + buffDef + defB;
     spd = baseSpd + spdB;
-    critPct = crit;
+    critPct = crit + metaCritPct;
     lifestealPct = vamp;
 }
 
@@ -102,7 +100,6 @@ std::vector<Hero> heroRoster() {
         makeHero("Паладин", Role::Paladin,   38, 6, 4, 3),
         makeHero("Берсерк", Role::Berserker, 34, 10, 1, 5),
         makeHero("Друид",   Role::Druid,     27, 4, 1, 4),
-        makeHero("Бард",    Role::Bard, 29, 6, 2, 4),
     };
 }
 
@@ -145,6 +142,17 @@ Item rollLoot(Rng& rng, int tier) {
     return it;
 }
 
+Item makePotion(int tier) {
+    static const char* potions[4] = {"Малое зелье", "Зелье лечения", "Большое зелье", "Эликсир жизни"};
+    tier = std::max(1, std::min(4, tier));
+    Item it;
+    it.kind = ItemKind::Potion;
+    it.tier = tier;
+    it.name = potions[tier - 1];
+    it.power = 10 * tier;
+    return it;
+}
+
 std::string itemBonusText(const Item& it) {
     switch (it.kind) {
         case ItemKind::Weapon: return fmt("+%d АТК", it.power);
@@ -159,37 +167,6 @@ std::string itemBonusText(const Item& it) {
             }
     }
     return "";
-}
-Item upgradeItem(const Item& it) {
-    static const char* weapons[4] = {"Ржавый меч", "Стальной клинок", "Зачарованный клинок", "Клинок героя"};
-    static const char* armors[4]  = {"Кожаная куртка", "Кольчуга", "Латы", "Драконья чешуя"};
-    static const char* relics[4]  = {"Амулет жизни", "Перо ветра", "Глаз сокола", "Клык вампира"};
-    Item up = it;
-    up.tier = std::min(4, it.tier + 1);
-    switch (up.kind) {
-        case ItemKind::Weapon:
-            up.name = weapons[up.tier - 1];
-            up.power = up.tier * 2 + 1;
-            break;
-        case ItemKind::Armor:
-            up.name = armors[up.tier - 1];
-            up.power = up.tier + 1;
-            break;
-        case ItemKind::Relic:
-            up.name = relics[static_cast<int>(it.relic)];
-            switch (it.relic) {
-                case RelicEffect::Vitality: up.power = 7 * up.tier; break;
-                case RelicEffect::Haste:    up.power = up.tier;     break;
-                case RelicEffect::Keen:     up.power = 8 * up.tier; break;
-                case RelicEffect::Vampire:  up.power = 7 * up.tier; break;
-            }
-            break;
-        case ItemKind::Potion:
-            up.name = it.name;
-            up.power = 10 * up.tier;
-            break;
-    }
-    return up;
 }
 
 // ----------------------------------------------------------------- магазин
@@ -209,7 +186,7 @@ int itemPrice(const Item& it) {
     return 0;
 }
 
-std::vector<ShopOffer> makeShopStock(Rng& rng, int count) {
+std::vector<ShopOffer> makeShopStock(Rng& rng, int count, int discountPct) {
     std::vector<ShopOffer> out;
     for (int i = 0; i < count; ++i) {
         const int r = rng.range(1, 100);
@@ -224,7 +201,7 @@ std::vector<ShopOffer> makeShopStock(Rng& rng, int count) {
         }
         ShopOffer o;
         o.item = it;
-        o.price = itemPrice(it);
+        o.price = std::max(1, itemPrice(it) * (100 - std::max(0, std::min(90, discountPct))) / 100);
         out.push_back(o);
     }
     return out;
@@ -265,14 +242,6 @@ void Party::buff(int index, int atk, int def) {
     heroes[index].buffDef += def;
     heroes[index].recalc();
 }
-void Party::clearCombatBuffs() {
-    for (auto& h : heroes) {
-        if (h.buffAtkCombat != 0) {
-            h.buffAtkCombat = 0;
-            h.recalc();
-        }
-    }
-}
 Hero* Party::findAlive(Role r) {
     for (auto& h : heroes)
         if (h.alive() && h.role == r) return &h;
@@ -289,10 +258,6 @@ bool Party::takeBestPotion(int& power) {
         if (bag[i].kind == ItemKind::Potion && (best < 0 || bag[i].power > bag[best].power)) best = i;
     if (best < 0) return false;
     power = bag[best].power;
-    // --- ИЗМЕНЕНИЕ: Увеличиваем силу лечения, если есть Маг ---
-    if (hasLivingMage()) {
-        power = power * 150 / 100;
-    }
     bag.erase(bag.begin() + best);
     return true;
 }
@@ -327,19 +292,9 @@ bool Party::usePotion(int bagIndex, int heroIndex) {
     if (heroIndex < 0 || heroIndex >= static_cast<int>(heroes.size())) return false;
     Hero& h = heroes[heroIndex];
     if (bag[bagIndex].kind != ItemKind::Potion || !h.alive() || h.hp >= h.maxHp) return false;
-    // --- ИЗМЕНЕНИЕ: Увеличиваем силу лечения, если есть Маг ---
-    int healPower = bag[bagIndex].power;
-    if (hasLivingMage()) {
-        healPower = healPower * 150 / 100; // +50%
-    }
     h.hp = std::min(h.maxHp, h.hp + bag[bagIndex].power);
     bag.erase(bag.begin() + bagIndex);
     return true;
 }
-bool Party::hasLivingMage() const {
-    for (const auto& h : heroes) {
-        if (h.alive() && h.role == Role::Mage) return true;
-    }
-    return false;
-}
+
 }  // namespace dc

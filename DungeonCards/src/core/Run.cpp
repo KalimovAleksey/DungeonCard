@@ -3,12 +3,45 @@
 
 namespace dc {
 
-Run::Run(const Dungeon& dungeon, uint32_t seed, std::vector<Hero> heroes)
+Run::Run(const Dungeon& dungeon, uint32_t seed, std::vector<Hero> heroes, RunOptions options)
     : dungeon_(dungeon),
       party_(heroes.empty() ? Party() : Party(std::move(heroes))),
       rng_(seed),
-      pos_(dungeon.startPos()) {
+      pos_(dungeon.startPos()),
+      meta_(options.meta),
+      artifacts_(std::max(0, options.artifacts)) {
     say("Отряд входит в подземелье. WASD - идти, I - инвентарь.");
+    for (const auto& h : party_.heroes) squad_.push_back(h.role);
+    died_.assign(party_.heroes.size(), false);
+
+    // Наследие: стартовые монеты и зелья («Дар предков»: 1 или 2 зелья).
+    party_.coins = meta_.startCoins();
+    const int gifts = meta_.provisions();
+    for (int i = 0; i < std::min(2, gifts); ++i) party_.bag.push_back(makePotion(1));
+    if (gifts > 0) say(fmt("Дар предков: в рюкзаке %d зелья.", std::min(2, gifts)));
+    updateLosses();
+}
+
+// Фиксируем каждого, кто хоть раз пал (воскрешённый остаётся в списке потерь).
+void Run::updateLosses() {
+    for (size_t i = 0; i < party_.heroes.size() && i < died_.size(); ++i)
+        if (!party_.heroes[i].alive()) died_[i] = true;
+}
+
+int Run::casualties() const {
+    int n = 0;
+    for (bool d : died_) n += d ? 1 : 0;
+    return n;
+}
+
+RunSummary Run::summary() const {
+    RunSummary s;
+    s.victory = phase_ == RunPhase::Victory;
+    s.bossId = fightBoss_;
+    s.squad = squad_;
+    s.casualties = casualties();
+    s.aliveAtEnd = party_.aliveCount();
+    return s;
 }
 
 void Run::say(const std::string& s) {
@@ -32,7 +65,7 @@ void Run::enterRoom(Vec2i p) {
     if (r->card.type == RoomType::Shop) {  // к торговцу можно возвращаться
         if (!r->visited) {
             r->visited = true;
-            stocks_[p] = makeShopStock(rng_, 5);
+            stocks_[p] = makeShopStock(rng_, 5, meta_.shopDiscountPct());
             say("Торговец! Покупай вещи за монеты.");
         } else {
             say("Снова у торговца.");
@@ -47,12 +80,12 @@ void Run::enterRoom(Vec2i p) {
 
     switch (r->card.type) {
         case RoomType::Combat:
-            startFight(makeEnemies(d, rng_), d, -1);
+            startFight(makeEnemies(d, rng_, meta_.coinBonusPct()), d, -1);
             break;
         case RoomType::Treasure:
             if (d >= 2) {
                 say("Сокровище охраняют!");
-                startFight(makeEnemies(d - 1, rng_), d, -1);
+                startFight(makeEnemies(d - 1, rng_, meta_.coinBonusPct()), d, -1);
             } else {
                 ++cleared_;
                 giveLoot(d);
@@ -70,15 +103,6 @@ void Run::enterRoom(Vec2i p) {
             phase_ = RunPhase::BossIntro;
             say(fmt("Логово босса: %s. Подготовь отряд!", bossInfo(pendingBoss_).name.c_str()));
             break;
-                case RoomType::Forge:
-            if (!r->visited) {
-                r->visited = true;
-                say("Кузница! Улучши предмет за монеты.");
-            } else {
-                say("Снова у кузницы.");
-            }
-            phase_ = RunPhase::ForgeChoice;
-            return;
         default:
             break;
     }
@@ -91,6 +115,7 @@ void Run::startFight(std::vector<Enemy> enemies, int lootTier, int bossId) {
     fightBoss_ = bossId;
     ++fightId_;
     combat_ = std::make_unique<Combat>(party_, std::move(enemies), rng_, bossId);
+    combat_->setDamageReduction(meta_.damageReducePct());
     phase_ = RunPhase::Fighting;
 }
 
@@ -103,23 +128,16 @@ void Run::beginBossFight() {
 void Run::step() {
     if (phase_ != RunPhase::Fighting || !combat_) return;
     combat_->step(log_);
+    updateLosses();
     int gained = 0;  // монеты с убитых врагов
     for (const auto& a : combat_->events())
         for (const auto& h : a.hits)
             if (!h.targetHero && !h.heal) gained += h.coins;
-            
-    // --- НОВОЕ: Пассивка Лучника ---
-    if (gained > 0 && hasLivingArcher()) {
-        int bonus = gained * kArcherCoinBonusPct / 100;
-        gained += bonus;
-    }
-    // -------------------------------
     if (gained > 0) {
         party_.coins += gained;
         say(fmt("Монеты: +%d (всего %d)", gained, party_.coins));
     }
     if (combat_->finished()) {
-        party_.clearCombatBuffs();   // <-- сброс временных баффов боя
         if (combat_->heroesWon()) {
             onFightWon();
         } else {
@@ -130,7 +148,6 @@ void Run::step() {
 }
 
 void Run::closeCombat() {
-    if (combat_) party_.clearCombatBuffs();
     if (combat_ && phase_ == RunPhase::Exploring) combat_.reset();
 }
 
@@ -158,20 +175,26 @@ void Run::giveLoot(int tier) {
 }
 
 void Run::resolveTrap(int d) {
-    if (party_.findAlive(Role::Rogue) && rng_.chance(0.5)) {
-        say("Вор обезвреживает ловушку!");
+    // Урон получают два РАЗНЫХ героя (один герой дважды - никогда). Живой Вор всегда
+    // замечает ловушку и снижает её урон до 50-60%.
+    int pct = 100;
+    if (party_.findAlive(Role::Rogue)) {
+        pct = rng_.range(50, 60);
+        say(fmt("Вор замечает ловушку: урон снижен до %d%%.", pct));
     } else {
         say("Ловушка сработала!");
-        for (int k = 0; k < 2; ++k) {
-            std::vector<Hero*> alive;
-            for (auto& h : party_.heroes)
-                if (h.alive()) alive.push_back(&h);
-            if (alive.empty()) break;
-            Hero* h = alive[rng_.range(0, static_cast<int>(alive.size()) - 1)];
-            h->hp -= d * 5;
-            say(fmt("%s: -%d%s", h->name.c_str(), d * 5, h->alive() ? "" : " - пал"));
-        }
     }
+    std::vector<int> alive;
+    for (int i = 0; i < static_cast<int>(party_.heroes.size()); ++i)
+        if (party_.heroes[i].alive()) alive.push_back(i);
+    rng_.shuffle(alive);
+    const int dmg = std::max(1, d * 5 * pct / 100);
+    for (size_t k = 0; k < alive.size() && k < 2; ++k) {
+        Hero& h = party_.heroes[alive[k]];
+        h.hp -= dmg;
+        say(fmt("%s: -%d%s", h.name.c_str(), dmg, h.alive() ? "" : " - пал"));
+    }
+    updateLosses();
     if (!party_.anyAlive()) {
         phase_ = RunPhase::Defeat;
         say("Отряд погиб в ловушке.");
@@ -183,11 +206,39 @@ void Run::resolveTrap(int d) {
 
 void Run::restHeal() {
     if (phase_ != RunPhase::RestChoice) return;
-    const int pct = restHealPct();
-    party_.healPercent(pct);
+    party_.healPercent(restHealPct());
     ++cleared_;
-    say(fmt("Привал: отряд восстановил %d%% здоровья.", pct));
+    say(fmt("Привал: отряд восстановил %d%% здоровья.", restHealPct()));
     phase_ = RunPhase::Exploring;
+}
+
+// Воскрешение на привале: платная услуга, привал при этом не заканчивается.
+bool Run::restRevive(int heroIndex) {
+    if (phase_ != RunPhase::RestChoice) return false;
+    if (heroIndex < 0 || heroIndex >= static_cast<int>(party_.heroes.size())) return false;
+    Hero& h = party_.heroes[heroIndex];
+    const int cost = reviveCoinCost();
+    if (h.alive() || party_.coins < cost) return false;
+    party_.coins -= cost;
+    if (heroIndex < static_cast<int>(died_.size())) died_[heroIndex] = true;
+    h.hp = std::max(1, h.maxHp * kRevivePct / 100);
+    h.away = false;
+    say(fmt("Привал: %s воскрешён за %d монет (%d%% здоровья).", h.name.c_str(), cost, kRevivePct));
+    return true;
+}
+
+// Воскрешение за артефакт: дороже по редкости валюты, зато здоровья больше.
+bool Run::restReviveArtifact(int heroIndex) {
+    if (phase_ != RunPhase::RestChoice) return false;
+    if (heroIndex < 0 || heroIndex >= static_cast<int>(party_.heroes.size())) return false;
+    Hero& h = party_.heroes[heroIndex];
+    if (h.alive() || artifacts_ < kReviveArtifactCost) return false;
+    artifacts_ -= kReviveArtifactCost;
+    if (heroIndex < static_cast<int>(died_.size())) died_[heroIndex] = true;
+    h.hp = std::max(1, h.maxHp * kReviveArtifactPct / 100);
+    h.away = false;
+    say(fmt("Привал: %s воскрешён за артефакт (%d%% здоровья).", h.name.c_str(), kReviveArtifactPct));
+    return true;
 }
 
 void Run::restBuff(const std::vector<int>& idx) {
@@ -208,37 +259,11 @@ void Run::restBuff(const std::vector<int>& idx) {
     say(fmt("Привал: усилены %s (+%d АТК, +%d ЗАЩ).", names.c_str(), kBuffAtk, kBuffDef));
     phase_ = RunPhase::Exploring;
 }
-int Run::forgePrice(const Item& it) const {
-    if (it.tier >= 4) return 0;                  // нельзя
-    // цена предмета следующего tier * kForgePricePct%
-    Item next = it;
-    next.tier = it.tier + 1;
-    return itemPrice(next) * kForgePricePct / 100;
-}
 
-bool Run::forgeUpgrade(int bagIndex) {
-    if (phase_ != RunPhase::ForgeChoice) return false;
-    if (bagIndex < 0 || bagIndex >= static_cast<int>(party_.bag.size())) return false;
-    const Item it = party_.bag[bagIndex];
-    if (it.tier >= 4) return false;                  // tier 4 не улучшается
-    if (it.kind == ItemKind::Potion) return false;   // зелья не улучшаем
-    const int price = forgePrice(it);
-    if (party_.coins < price) return false;
-
-    const Item up = upgradeItem(it);                 // вся логика — в upgradeItem
-    party_.coins -= price;
-    party_.bag[bagIndex] = up;
-    say(fmt("Кузница: %s -> %s (за %d монет)", it.name.c_str(), up.name.c_str(), price));
-    return true;
-}
-
-void Run::leaveForge() {
-    if (phase_ == RunPhase::ForgeChoice) phase_ = RunPhase::Exploring;
-}
 // ------------------------------------------------------------ инвентарь
 
 bool Run::canManage() const {
-    return (phase_ == RunPhase::Exploring && !combat_) || phase_ == RunPhase::BossIntro || phase_ == RunPhase::Shop || phase_ == RunPhase::ForgeChoice;
+    return (phase_ == RunPhase::Exploring && !combat_) || phase_ == RunPhase::BossIntro || phase_ == RunPhase::Shop;
 }
 
 // ------------------------------------------------------------- торговец
@@ -261,11 +286,6 @@ bool Run::buy(int idx) {
     auto it = stocks_.find(pos_);
     if (it == stocks_.end() || idx < 0 || idx >= static_cast<int>(it->second.size())) return false;
     ShopOffer& o = it->second[idx];
-    // --- НОВОЕ: Скидка Барда ---
-    int finalPrice = o.price;
-    if (hasLivingBard()) {
-        finalPrice = finalPrice * 85 / 100; // 15% скидка
-    }
     if (o.sold || party_.coins < o.price) return false;
     party_.coins -= o.price;
     o.sold = true;
@@ -281,63 +301,5 @@ void Run::leaveShop() {
 bool Run::equipItem(int bagIndex, int heroIndex) { return canManage() && party_.equipFromBag(bagIndex, heroIndex); }
 bool Run::unequipItem(int heroIndex, ItemKind slot) { return canManage() && party_.unequip(heroIndex, slot); }
 bool Run::usePotion(int bagIndex, int heroIndex) { return canManage() && party_.usePotion(bagIndex, heroIndex); }
-
-bool Run::canRestRevive() const {
-    for (const auto& h : party_.heroes)
-        if (!h.alive()) return true;
-    return false;
-}
-int Run::reviveChancePct() const { // <-- ДОЛЖНО БЫТЬ ТАК
-    for (const auto& h : party_.heroes) {
-        if (h.alive() && h.role == Role::Cleric) {
-            return kReviveChanceClericPct;
-        }
-    }
-    return kReviveChancePct;
-}
-int Run::restHealPct() const {
-    for (const auto& h : party_.heroes) {
-        if (h.alive() && h.role == Role::Paladin) {
-            return kRestHealPaladinPct;
-        }
-    }
-    return kRestHealPct;
-} // <--- Не забудьте закрыть метод!
-bool Run::hasLivingArcher() const {
-    for (const auto& h : party_.heroes) {
-        if (h.alive() && h.role == Role::Archer) {
-            return true;
-        }
-    }
-    return false;
-}
-bool Run::hasLivingBard() const {
-    for (const auto& h : party_.heroes) {
-        if (h.alive() && h.role == Role::Bard) return true;
-    }
-    return false;
-}
-
-void Run::restRevive() {
-    if (phase_ != RunPhase::RestChoice) return;
-
-    std::vector<int> dead;
-    for (int i = 0; i < (int)party_.heroes.size(); ++i)
-        if (!party_.heroes[i].alive()) dead.push_back(i);
-    if (dead.empty()) return;
-
-    ++cleared_;
-    const int pick = dead[rng_.range(0, (int)dead.size() - 1)];
-    Hero& h = party_.heroes[pick];
-
-    if (rng_.range(1, 100) <= reviveChancePct()) {
-        h.hp = std::max(1, h.maxHp * kReviveHpPct / 100);
-        h.away = false;
-        say(fmt("Привал: чудо! %s возвращается в строй (%d%% ЗДР).", h.name.c_str(), kReviveHpPct));
-    } else {
-        say(fmt("Привал: попытка воскресить %s не удалась.", h.name.c_str()));
-    }
-    phase_ = RunPhase::Exploring;
-}
 
 }  // namespace dc

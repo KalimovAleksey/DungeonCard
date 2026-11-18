@@ -18,6 +18,8 @@ option(DC_BUILD_TOOLS "Собрать тесты и симулятор бала�
 add_library(dc_core STATIC
   src/core/Assets.cpp
   src/core/Boss.cpp
+  src/core/Meta.cpp
+  src/core/Profile.cpp
   src/core/Card.cpp
   src/core/Dungeon.cpp
   src/core/Party.cpp

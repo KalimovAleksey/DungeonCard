@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <string>
 #include <vector>
 #include "Boss.h"
@@ -22,7 +23,7 @@ struct Enemy {
     bool alive() const { return hp > 0; }
 };
 
-std::vector<Enemy> makeEnemies(int difficulty, Rng& rng);  // группа врагов по сложности 1..3
+std::vector<Enemy> makeEnemies(int difficulty, Rng& rng, int coinBonusPct = 0);  // группа врагов по сложности 1..3
 Enemy makeBoss(int bossId);
 
 // Описание попадания/лечения: по нему интерфейс рисует числа и вспышки.
@@ -57,6 +58,7 @@ public:
     const std::vector<Enemy>& enemies() const { return enemies_; }
     int round() const { return round_; }
     int slotCount() const { return slotCount_; }
+    void setDamageReduction(int pct) { dmgReducePct_ = std::max(0, std::min(60, pct)); }  // «Закалённые доспехи»
     int bossId() const { return bossId_; }
     // События последнего вызова step() (зелья, регенерация, само действие, реакции).
     const std::vector<CombatAction>& events() const { return events_; }
@@ -99,6 +101,7 @@ private:
     int round_ = 0;
     int bossId_ = -1;
     int slotCount_ = 1;
+    int dmgReducePct_ = 0;
 
     // механики боссов
     int swallowed_ = -1;       // индекс проглоченного героя

@@ -12,7 +12,6 @@ const char* roomTypeName(RoomType t) {
         case RoomType::Rest:     return "Отдых";
         case RoomType::Boss:     return "БОСС";
         case RoomType::Shop:     return "Торговец";
-        case RoomType::Forge:    return "Кузница";
     }
     return "?";
 }
@@ -22,11 +21,10 @@ const char* roomTypeHint(RoomType t) {
         case RoomType::Start:    return "Отсюда начинается поход";
         case RoomType::Combat:   return "Враги; добыча зависит от сложности";
         case RoomType::Treasure: return "Охрана (со 2 ур.) и добыча";
-        case RoomType::Trap:     return "Урон двум героям, вор может обезвредить";
+        case RoomType::Trap:     return "Урон двум разным героям; Вор снижает его";
         case RoomType::Rest:     return "Привал: лечение всех или бафф двух героев";
         case RoomType::Boss:     return "Финал: победа в забеге";
         case RoomType::Shop:     return "Лавка у края карты: подключи её";
-        case RoomType::Forge:    return "Обменяй предмет на улучшенный (tier+1) за монеты";
     }
     return "";
 }
@@ -40,7 +38,6 @@ const char* roomTypeKey(RoomType t) {
         case RoomType::Rest:     return "rest";
         case RoomType::Boss:     return "boss";
         case RoomType::Shop:     return "shop";
-        case RoomType::Forge:    return "forge";
     }
     return "room";
 }
@@ -68,11 +65,10 @@ Deck::Deck(Rng& rng, int bossId, int bossMin, int bossMax) {
             pool.push_back(c);
         }
     };
-    add(RoomType::Combat,   11, 1, 3);
-    add(RoomType::Treasure,  4, 1, 3);
-    add(RoomType::Trap,      4, 1, 3);
-    add(RoomType::Rest,      4, 1, 1);
-    add(RoomType::Forge,     3, 1, 2);
+    add(RoomType::Combat, 11, 1, 3);
+    add(RoomType::Treasure, 4, 1, 3);
+    add(RoomType::Trap, 4, 1, 3);
+    add(RoomType::Rest, 4, 1, 1);
     rng.shuffle(pool);
 
     Card boss;

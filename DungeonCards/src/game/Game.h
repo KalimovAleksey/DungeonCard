@@ -11,7 +11,9 @@
 #include "core/Card.h"
 #include "core/Combat.h"
 #include "core/Dungeon.h"
+#include "core/Meta.h"
 #include "core/Party.h"
+#include "core/Profile.h"
 #include "core/Rng.h"
 #include "core/Run.h"
 
@@ -29,8 +31,7 @@ public:
     void run();
 
 private:
-    bool restActionDone_ = false;   
-    enum class Screen { MainMenu, Select, Build, Run, Result, Pause, Settings };
+    enum class Screen { MainMenu, Select, Build, Run, Result, Pause, Settings, Achievements, Legacy };
     struct Settings {
         int width = 1280;
         int height = 720;
@@ -74,7 +75,7 @@ private:
         bool heal = false;
     };
 
-    static constexpr int kMaxRoster = 9;
+    static constexpr int kMaxRoster = 8;
     static constexpr int kPartySize = 4;
     static constexpr int kHand = 4;
     static constexpr int kMaxPlacements = 12;
@@ -90,6 +91,17 @@ private:
     bool hasAnyMove() const;
     void setMessage(const std::string& m, bool bad);
     int chosenCount() const;
+
+    // профиль: артефакты, достижения, Наследие (хранится в profile.sav)
+    void loadProfile();
+    void saveProfile() const;
+    void refreshRoster();           // герои с учётом улучшений Наследия
+    void recordRunResult();         // итог забега -> артефакты и достижения
+    void updateAchievements();
+    void updateLegacy();
+    void drawAchievements();
+    void drawLegacy();
+    void drawArtifact(float cx, float cy, float radius) const;
 
     // меню и настройки
     void loadSettings();
@@ -115,7 +127,6 @@ private:
     void updateRestChoice();
     void updateInventory();
     void updateShop();
-    void updateForge();
     void onRunStep();
     void spawnActions();
     void updateAnims(float dt);
@@ -131,7 +142,6 @@ private:
     void drawRestOverlay();
     void drawInventory();
     void drawShop();
-    void drawForge(); 
     void drawBossCard(int x, int y, int w, int h, int bossId) const;
     void drawBossIntro();
     void drawResult();
@@ -152,6 +162,8 @@ private:
     void drawBagCell(int x, int y, int size, const Item* it, bool selected, bool hover) const;
     void drawEquipSlot(int x, int y, int size, ItemKind kind, const std::optional<Item>& item, bool fits, bool hover) const;
     void drawItemTooltip(const Item& it, Vector2 at) const;
+    void drawStar(float cx, float cy, float r, Color col) const;
+    void drawStars(float x, float y, int count, float r) const;   // звёзды уровня предмета (крупные, с контуром)
 
     // текст
     void drawText(const std::string& s, float x, float y, float size, Color c) const;
@@ -179,6 +191,11 @@ private:
 
     // окно, меню, настройки
     Settings settings_;
+    Profile profile_;                    // постоянные данные: артефакты, достижения, Наследие
+    std::string profilePath_ = "profile.sav";
+    RunReward lastReward_;               // награда за последний забег (для экрана итога)
+    bool runRecorded_ = false;
+    std::string legacyMsg_;
     std::vector<Resolution> resolutions_;
     RenderTexture2D target_{};
     bool quit_ = false;
@@ -191,14 +208,7 @@ private:
     Dungeon dungeon_;
     std::unique_ptr<Run> run_;
     Slot hand_[kHand];
-    
     int selected_ = 0;
-    // Прокрутка экрана выбора героев
-    float selScroll_ = 0.f;      // текущее смещение
-    float selScrollTarget_ = 0.f;// целевое (для плавной анимации)
-    float selContentH_ = 0.f;    // общая высота всех карточек
-    float selViewH_ = 0.f;       // высота видимой области (сетки)
-
     int placementsLeft_ = 0;
     int discardsLeft_ = 0;
     std::string message_;
@@ -225,8 +235,8 @@ private:
     bool invOpen_ = false;
     int invSel_ = -1;
     std::string invMsg_;
+    std::string restMsg_;
     std::string shopMsg_;
-    std::string forgeMsg_; 
 
     // анимация боя
     int lastFightId_ = 0;
