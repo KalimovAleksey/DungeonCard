@@ -981,23 +981,28 @@ void Game::updateRestChoice() {
     }
 
     // стадия 2: выбор павшего героя для воскрешения (платная услуга, привал продолжается)
+        // стадия 2: выбор павшего героя для воскрешения
     if (restStage_ == 2) {
         std::vector<int> dead;
         for (int i = 0; i < (int)hs.size() && i < kMaxRoster; ++i)
             if (!hs[i].alive()) dead.push_back(i);
+            
         if (IsKeyPressed(KEY_B) || dead.empty()) { restStage_ = 0; return; }
 
         const int rk[4] = {KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR};
-        for (int k = 0; k < (int)dead.size(); ++k) {
-            const int idx = dead[k];
-            const int rx = kGridX + 40, ry = kGridY + 100 + k * 84;
-            
-            const int paidCost = run_->revivePaidCost(idx);
+        for (int i = 0; i < (int)hs.size() && i < kMaxRoster; ++i) {
+            if (hs[i].alive()) continue; // живых пропускаем
 
+            const int rx = kGridX + 40, ry = kGridY + 100 + i * 84;
+            const int paidCost = run_->revivePaidCost(i);
+
+            // Координаты для кликов (синхронизированы с отрисовкой!)
             const bool onCoin = click && inRect(m, rx + 380, ry + 14, 100, 44);
             const bool onArtifact = click && inRect(m, rx + 500, ry + 14, 100, 44);
-            const bool rowPick = (k < 4 && IsKeyPressed(rk[k])) ||
-                                (click && !onCoin && !onArtifact && inRect(m, rx, ry, 640, 72));
+            
+            // Клик по самой строке (кроме кнопок)
+            const bool rowPick = (i < 4 && IsKeyPressed(rk[i])) ||
+                                 (click && !onCoin && !onArtifact && inRect(m, rx, ry, 640, 72));
 
             bool useArtifact = onArtifact, useCoins = onCoin;
             if (rowPick) {
@@ -1008,19 +1013,20 @@ void Game::updateRestChoice() {
 
             bool ok;
             if (useArtifact) {
-                ok = run_->restReviveArtifact(idx);
+                ok = run_->restReviveArtifact(i);
                 if (ok) { profile_.artifacts = run_->artifacts(); saveProfile(); }
             } else {
-                ok = run_->restRevivePaid(idx);
+                ok = run_->restRevivePaid(i);
             }
 
-            if (ok)
-                restMsg_ = fmt("%s воскрешён: %d%% здоровья.", hs[idx].name.c_str(),
+            if (ok) {
+                restMsg_ = fmt("%s воскрешён: %d%% здоровья.", hs[i].name.c_str(),
                             useArtifact ? Run::kReviveArtifactPct : Run::kRevivePct);
-            else
+                restStage_ = 0; // Успех! Возвращаемся на главный экран привала
+            } else {
                 restMsg_ = useArtifact ? "Нет артефактов." : "Не хватает монет.";
-                
-            restStage_ = 0;
+                // Если не удалось - остаемся на стадии 2, чтобы игрок мог выбрать другого или нажать Назад
+            }
             return;
         }
         return;
@@ -2187,30 +2193,30 @@ void Game::drawRestOverlay() {
 
     // ---------- стадия 2: воскрешение (только павшие) ----------
     if (restStage_ == 2) {
-        if (h.alive()) continue;
+        if (h.alive()) continue; // не рисуем кнопки для живых
 
         const int paid = run_->revivePaidCost(i);
         const int chance = run_->reviveBaseChancePct();
         const bool canCoins = run_->party().coins >= paid;
         const bool canArtifact = run_->artifacts() >= Run::kReviveArtifactCost;
 
-        // цена и шанс
         drawText(fmt("Шанс: %d%%  |  Доплата: %d монет  |  Артефакт: 1",
                      chance, paid),
                  rx + 74.f, ry + 30.f, 16, kDim);
 
-        // две кнопки: [Монеты] и [Артефакт]
+        // Кнопки (те же координаты, что и в updateRestChoice!)
         const int btnY = ry + 14, btnH = 44;
-        // Сдвигаем кнопки левее:
         const int btnCoinX = rx + 380, btnArtX = rx + 500, btnW = 100;
 
-        // Рисуем кнопку "Монеты"
-        DrawRectangle(btnCoinX, btnY, btnW, btnH, canCoins ? (hover ? Color{56, 60, 80, 255} : Color{38, 40, 56, 255}) : Color{28, 29, 36, 255});
+        DrawRectangle(btnCoinX, btnY, btnW, btnH,
+                      canCoins ? (hover && inRect(m, btnCoinX, btnY, btnW, btnH) ? Color{56, 60, 80, 255} : Color{38, 40, 56, 255})
+                               : Color{28, 29, 36, 255});
         DrawRectangleLines(btnCoinX, btnY, btnW, btnH, canCoins ? kCoin : kGridLine);
         drawTextCentered(fmt("%d", paid), btnCoinX + btnW / 2.f, btnY + 8.f, 18, canCoins ? kCoin : kDim);
 
-        // Рисуем кнопку "Артефакт"
-        DrawRectangle(btnArtX, btnY, btnW, btnH, canArtifact ? (hover ? Color{56, 60, 80, 255} : Color{38, 40, 56, 255}) : Color{28, 29, 36, 255});
+        DrawRectangle(btnArtX, btnY, btnW, btnH,
+                      canArtifact ? (hover && inRect(m, btnArtX, btnY, btnW, btnH) ? Color{56, 60, 80, 255} : Color{38, 40, 56, 255})
+                                  : Color{28, 29, 36, 255});
         DrawRectangleLines(btnArtX, btnY, btnW, btnH, canArtifact ? Color{190, 150, 255, 255} : kGridLine);
         drawTextCentered("арт.", btnArtX + btnW / 2.f, btnY + 8.f, 18, canArtifact ? Color{190, 150, 255, 255} : kDim);
 
