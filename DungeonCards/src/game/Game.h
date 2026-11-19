@@ -83,6 +83,8 @@ private:
 
     // состояние партии
     void rollRun();                 // новый забег: seed и три предложенных босса
+    void resetForNewRun(uint32_t seed = 0);
+    void nextFloor();
     void newGame(uint32_t seed);
     void refill(Slot& s);
     void startRun();
@@ -191,6 +193,17 @@ private:
     int bossId_ = 0;               // босс забега
     bool showBossCard_ = false;
 
+    // скролл экрана выбора
+    float selScroll_ = 0.0f;
+    float selScrollTarget_ = 0.0f;
+    float selContentH_ = 0.0f;
+    float selViewH_ = 0.0f;
+
+    // этажи и привал
+    int currentFloor_ = 1;
+    std::vector<int> defeatedBosses_;
+    bool restActionDone_ = false;
+
     // окно, меню, настройки
     Settings settings_;
     Profile profile_;                    // постоянные данные: артефакты, достижения, Наследие
@@ -232,6 +245,7 @@ private:
     bool inRest_ = false;
     int restStage_ = 0;  // 0 - выбор действия, 1 - выбор героев для баффа
     bool restPick_[kMaxRoster] = {};
+    
 
     // инвентарь
     bool invOpen_ = false;

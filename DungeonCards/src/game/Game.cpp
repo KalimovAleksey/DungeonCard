@@ -361,7 +361,10 @@ void Game::rollRun() {
     showBossCard_ = false;
 }
 
-void Game::resetForNewRun() {
+void Game::resetForNewRun(uint32_t seed) {
+    if (seed == 0) {
+        seed = nextSeed_++; // или используйте текущий генератор сидов проекта
+    }
     currentFloor_ = 1;
     defeatedBosses_.clear();
     for (int i = 0; i < kMaxRoster; ++i) chosen_[i] = (i < kPartySize);
@@ -1246,7 +1249,7 @@ void Game::spawnActions() {
                 cf.text = fmt("+%d мон.", h.coins);
                 cf.col = kCoin;
                 cf.size = 18.f;
-                cf.delay = d;
+                cf.delay = 0.2f;
                 cf.fired = true;
                 floaters_.push_back(cf);
             }
