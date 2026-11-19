@@ -345,7 +345,9 @@ int Run::restHealPct() const {
 bool Run::hasLivingArcher() const { return party_.findAlive(Role::Archer) != nullptr; }
 bool Run::hasLivingBard() const { return party_.findAlive(Role::Bard) != nullptr; }
 bool Run::canRestRevive() const { for (const auto& h : party_.heroes) if (!h.alive()) return true; return false; }
-
+int Run::reviveCoinCost() const {
+    return meta_.reviveCoinCost();
+}
 void Run::restReviveRandom() {
     if (phase_ != RunPhase::RestChoice) return;
     std::vector<int> dead;
