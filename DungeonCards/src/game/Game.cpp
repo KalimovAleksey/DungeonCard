@@ -977,7 +977,6 @@ void Game::updateRestChoice() {
             else if (!anyRevive) restMsg_ = "Не хватает монет или артефактов.";
             else { restStage_ = 2; restMsg_.clear(); }
         }       
-        restStage_ = 0;
         return;
     }
 
