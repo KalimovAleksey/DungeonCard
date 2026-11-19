@@ -2086,6 +2086,7 @@ void Game::drawRestOverlay() {
             DrawRectangle(bx, by, bw, bh, !enabled ? Color{26, 27, 34, 255} : hover ? Color{40, 48, 56, 255} : kPanel);
             DrawRectangleLines(bx, by, bw, bh, !enabled ? kGridLine : hover ? kAccent : kGridLine);
             // описание тоже приглушить:
+            float ty = static_cast<float>(by + 56);
             for (const auto& l : wrap(descs[k], bw - 28.f, 16)) {
                 drawText(l, static_cast<float>(bx + 14), ty, 16, enabled ? kText : kDim);
                 ty += 21;
@@ -2268,8 +2269,7 @@ void Game::drawShop() {
         for (int i = 0; i < static_cast<int>(stock->size()); ++i) {
             const ShopOffer& o = (*stock)[i];
             const R r{kGridX + 20, kGridY + 88 + i * 76, 680, 68};
-            int finalPrice = o.price;
-            if (run_->hasLivingBard()) finalPrice = finalPrice * 85 / 100;
+            
             const int finalPrice = run_->effectivePrice(o);
             const bool afford = run_->party().coins >= finalPrice;   // ← по итоговой цене!     
             const bool hover = !o.sold && inR(m, r);
