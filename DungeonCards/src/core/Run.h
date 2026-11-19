@@ -59,9 +59,7 @@ public:
     int restHealPct() const;
     bool hasLivingArcher() const;
     bool hasLivingBard() const;
-    bool restRevive(int heroIndex);           // за монеты; привал продолжается
-    bool restReviveArtifact(int heroIndex);   // за артефакт (постоянная валюта), здоровья больше
-    int reviveCoinCost() const { return meta_.reviveCoinCost(); }
+    void restReviveRandom(); 
     int artifacts() const { return artifacts_; }    // артефакты, оставшиеся у игрока
     const Meta& meta() const { return meta_; }
     int casualties() const;                          // сколько героев погибало за забег
