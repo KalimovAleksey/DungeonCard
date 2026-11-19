@@ -2074,7 +2074,17 @@ void Game::drawRestOverlay() {
 
         bool anyDead = false;
         for (const auto& h : hs) anyDead |= !h.alive();
-        const bool canRevive = anyDead && (run_->party().coins >= run_->reviveCoinCost() || run_->artifacts() >= Run::kReviveArtifactCost);
+        bool canRevive = false;
+        if (anyDead) {
+            for (const auto& h : hs) {
+                if (!h.alive()) {
+                    if (run_->party().coins >= run_->revivePaidCost(&h - &hs[0]) || run_->artifacts() >= Run::kReviveArtifactCost) {
+                        canRevive = true;
+                        break;
+                    }
+                }
+            }
+        }
 
         const int bw = 224, bh = 220, by = kGridY + 130;
         const char* titles[3] = {"[1] Лечение", "[2] Усиление", "[3] Воскрешение"};
