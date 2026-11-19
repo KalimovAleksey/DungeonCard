@@ -994,8 +994,8 @@ void Game::updateRestChoice() {
             
             const int paidCost = run_->revivePaidCost(idx);
 
-            const bool onCoin = click && inRect(m, rx + 400, ry + 14, 112, 44);
-            const bool onArtifact = click && inRect(m, rx + 520, ry + 14, 112, 44);
+            const bool onCoin = click && inRect(m, rx + 380, ry + 14, 100, 44);
+            const bool onArtifact = click && inRect(m, rx + 500, ry + 14, 100, 44);
             const bool rowPick = (k < 4 && IsKeyPressed(rk[k])) ||
                                 (click && !onCoin && !onArtifact && inRect(m, rx, ry, 640, 72));
 
@@ -2201,17 +2201,16 @@ void Game::drawRestOverlay() {
 
         // две кнопки: [Монеты] и [Артефакт]
         const int btnY = ry + 14, btnH = 44;
-        const int btnCoinX = rx + 400, btnArtX = rx + 520, btnW = 112;
+        // Сдвигаем кнопки левее:
+        const int btnCoinX = rx + 380, btnArtX = rx + 500, btnW = 100;
 
-        DrawRectangle(btnCoinX, btnY, btnW, btnH,
-                      canCoins ? (hover && inRect(m, btnCoinX, btnY, btnW, btnH) ? Color{56, 60, 80, 255} : Color{38, 40, 56, 255})
-                               : Color{28, 29, 36, 255});
+        // Рисуем кнопку "Монеты"
+        DrawRectangle(btnCoinX, btnY, btnW, btnH, canCoins ? (hover ? Color{56, 60, 80, 255} : Color{38, 40, 56, 255}) : Color{28, 29, 36, 255});
         DrawRectangleLines(btnCoinX, btnY, btnW, btnH, canCoins ? kCoin : kGridLine);
         drawTextCentered(fmt("%d", paid), btnCoinX + btnW / 2.f, btnY + 8.f, 18, canCoins ? kCoin : kDim);
 
-        DrawRectangle(btnArtX, btnY, btnW, btnH,
-                      canArtifact ? (hover && inRect(m, btnArtX, btnY, btnW, btnH) ? Color{56, 60, 80, 255} : Color{38, 40, 56, 255})
-                                  : Color{28, 29, 36, 255});
+        // Рисуем кнопку "Артефакт"
+        DrawRectangle(btnArtX, btnY, btnW, btnH, canArtifact ? (hover ? Color{56, 60, 80, 255} : Color{38, 40, 56, 255}) : Color{28, 29, 36, 255});
         DrawRectangleLines(btnArtX, btnY, btnW, btnH, canArtifact ? Color{190, 150, 255, 255} : kGridLine);
         drawTextCentered("арт.", btnArtX + btnW / 2.f, btnY + 8.f, 18, canArtifact ? Color{190, 150, 255, 255} : kDim);
 

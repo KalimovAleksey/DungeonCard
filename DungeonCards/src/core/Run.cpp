@@ -240,16 +240,18 @@ void Run::restHeal() {
 bool Run::restRevivePaid(int heroIndex) {
     if (phase_ != RunPhase::RestChoice) return false;
     if (heroIndex < 0 || heroIndex >= (int)party_.heroes.size()) return false;
+    
     Hero& h = party_.heroes[heroIndex];
     if (h.alive()) return false;
+    
     const int cost = revivePaidCost(heroIndex);
     if (party_.coins < cost) return false;
+    
     party_.coins -= cost;
     if (heroIndex < (int)died_.size()) died_[heroIndex] = true;
     h.hp = std::max(1, h.maxHp * kRevivePct / 100);
     h.away = false;
-    say(fmt("Привал: %s воскрешён за %d монет (100%% шанс, %d%% ЗДР).",
-            h.name.c_str(), cost, kRevivePct));
+    say(fmt("Привал: %s воскрешён за %d монет.", h.name.c_str(), cost));
     return true;
 }
 
