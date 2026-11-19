@@ -49,9 +49,13 @@ public:
     // --- привал ---
     void restHeal();
     void restBuff(const std::vector<int>& heroIndexes);
-    bool canRestRevive() const;
-    int reviveChancePct() const;
-    void restReviveRandom();
+    bool canRestRevive() const;                      // есть хоть один павший
+    int reviveBaseChancePct() const;                 // 25% база, 50% с живым Жрецом
+    int reviveCoinCost() const;                      // полная цена за 100% (из meta_)
+    int revivePaidCost(int heroIndex) const;         // цена доплаты за шанс для конкретного героя
+    bool restRevivePaid(int heroIndex);              // гарантированное воскрешение за монеты (100%)
+    bool restReviveArtifact(int heroIndex);          // гарантированное за артефакт (100%, дороже)
+
     int restHealPct() const;
     bool hasLivingArcher() const;
     bool hasLivingBard() const;

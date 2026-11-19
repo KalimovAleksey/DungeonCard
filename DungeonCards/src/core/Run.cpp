@@ -237,17 +237,19 @@ void Run::restHeal() {
 }
 
 // Воскрешение на привале: платная услуга, привал при этом не заканчивается.
-bool Run::restRevive(int heroIndex) {
+bool Run::restRevivePaid(int heroIndex) {
     if (phase_ != RunPhase::RestChoice) return false;
-    if (heroIndex < 0 || heroIndex >= static_cast<int>(party_.heroes.size())) return false;
+    if (heroIndex < 0 || heroIndex >= (int)party_.heroes.size()) return false;
     Hero& h = party_.heroes[heroIndex];
-    const int cost = reviveCoinCost();
-    if (h.alive() || party_.coins < cost) return false;
+    if (h.alive()) return false;
+    const int cost = revivePaidCost(heroIndex);
+    if (party_.coins < cost) return false;
     party_.coins -= cost;
-    if (heroIndex < static_cast<int>(died_.size())) died_[heroIndex] = true;
+    if (heroIndex < (int)died_.size()) died_[heroIndex] = true;
     h.hp = std::max(1, h.maxHp * kRevivePct / 100);
     h.away = false;
-    say(fmt("Привал: %s воскрешён за %d монет (%d%% здоровья).", h.name.c_str(), cost, kRevivePct));
+    say(fmt("Привал: %s воскрешён за %d монет (100%% шанс, %d%% ЗДР).",
+            h.name.c_str(), cost, kRevivePct));
     return true;
 }
 
@@ -263,6 +265,16 @@ bool Run::restReviveArtifact(int heroIndex) {
     h.away = false;
     say(fmt("Привал: %s воскрешён за артефакт (%d%% здоровья).", h.name.c_str(), kReviveArtifactPct));
     return true;
+}
+int Run::reviveBaseChancePct() const {
+    return party_.findAlive(Role::Cleric) ? 50 : 25;
+}
+int Run::revivePaidCost(int heroIndex) const {
+    if (heroIndex < 0 || heroIndex >= (int)party_.heroes.size()) return reviveCoinCost();
+    if (party_.heroes[heroIndex].alive()) return 0;
+    const int full = reviveCoinCost();
+    const int chance = reviveBaseChancePct();
+    return full * (100 - chance) / 100;   // 100-75=75 или 100-50=50
 }
 
 void Run::restBuff(const std::vector<int>& idx) {
@@ -336,12 +348,22 @@ bool Run::canRestRevive() const { for (const auto& h : party_.heroes) if (!h.ali
 int Run::reviveChancePct() const { return party_.findAlive(Role::Cleric) ? 50 : 25; }
 void Run::restReviveRandom() {
     if (phase_ != RunPhase::RestChoice) return;
-    std::vector<int> dead; for (int i=0;i<(int)party_.heroes.size();++i) if (!party_.heroes[i].alive()) dead.push_back(i);
+    std::vector<int> dead;
+    for (int i = 0; i < (int)party_.heroes.size(); ++i)
+        if (!party_.heroes[i].alive()) dead.push_back(i);
     if (dead.empty()) return;
-    int i = dead[rng_.range(0, (int)dead.size()-1)]; Hero& h=party_.heroes[i];
-    if (rng_.range(1,100) <= reviveChancePct()) { h.hp=std::max(1,h.maxHp*30/100); h.away=false; say(fmt("Привал: %s возвращается в строй (30%% ЗДР).",h.name.c_str())); }
-    else say(fmt("Привал: попытка воскресить %s не удалась.",h.name.c_str()));
-    ++cleared_; phase_=RunPhase::Exploring;
+    int i = dead[rng_.range(0, (int)dead.size()-1)];
+    Hero& h = party_.heroes[i];
+    if (rng_.range(1,100) <= reviveBaseChancePct()) {
+        h.hp = std::max(1, h.maxHp * 30 / 100);
+        h.away = false;
+        say(fmt("Привал: %s возвращается в строй (%d%% шанс, 30%% ЗДР).",
+                h.name.c_str(), reviveBaseChancePct()));
+    } else {
+        say(fmt("Привал: попытка воскресить %s не удалась.", h.name.c_str()));
+    }
+    ++cleared_;
+    phase_ = RunPhase::Exploring;
 }
 int Run::forgePrice(const Item& it) const { if (it.tier>=4 || it.kind==ItemKind::Potion) return 0; Item n=it; ++n.tier; return itemPrice(n)*60/100; }
 bool Run::forgeUpgrade(int i) {
