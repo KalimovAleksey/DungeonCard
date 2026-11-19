@@ -2075,10 +2075,16 @@ void Game::drawRestOverlay() {
             fmt("Все живые герои восстанавливают %d%% максимального здоровья.", run_->restHealPct()),
             fmt("Выбери двух героев: каждый получит +%d АТК и +%d ЗАЩ до конца похода.", Run::kBuffAtk, Run::kBuffDef),
             const int full = run_->reviveCoinCost();
-            const int chance = run_->reviveBaseChancePct();
-            const int discounted = full * (100 - chance) / 100;
-            fmt("Базовый шанс %d%%%s. Доплата до 100%%: %d из %d монет. Или 1 артефакт (100%% ЗДР).",
-                chance, chance >= 50 ? " (Жрец)" : "", discounted, full)
+            const int baseChance = run_->reviveBaseChancePct();
+            const int discounted = full * (100 - baseChance) / 100;
+
+            const std::string descs[3] = {
+                fmt("Все живые герои восстанавливают %d%% максимального здоровья.", run_->restHealPct()),
+                fmt("Выбери двух героев: каждый получит +%d АТК и +%d ЗАЩ до конца похода.", Run::kBuffAtk, Run::kBuffDef),
+                fmt("Базовый шанс %d%%%s. Доплата до 100%%: %d из %d монет. Или %d артефакт (%d%% ЗДР).",
+                    baseChance, baseChance >= 50 ? " (Жрец)" : "",
+                    discounted, full, Run::kReviveArtifactCost, Run::kReviveArtifactPct)
+            };
         const Color titleCols[3] = {kHeal, kAccent, kCoin};
         for (int k = 0; k < 3; ++k) {
             const int bx = kGridX + 14 + k * 236;
