@@ -992,9 +992,7 @@ void Game::updateRestChoice() {
             const int idx = dead[k];
             const int rx = kGridX + 40, ry = kGridY + 100 + k * 84;
             
-            // Объявляем ОДИН РАЗ:
             const int paidCost = run_->revivePaidCost(idx);
-            // (переменная chance здесь не нужна, удалите её, если она есть)
 
             const bool onCoin = click && inRect(m, rx + 400, ry + 14, 112, 44);
             const bool onArtifact = click && inRect(m, rx + 520, ry + 14, 112, 44);
@@ -2080,10 +2078,8 @@ void Game::drawRestOverlay() {
 
         const int bw = 224, bh = 220, by = kGridY + 130;
         const char* titles[3] = {"[1] Лечение", "[2] Усиление", "[3] Воскрешение"};
-        const std::string descs[3] = {
-            fmt("Все живые герои восстанавливают %d%% максимального здоровья.", run_->restHealPct()),
-            fmt("Выбери двух героев: каждый получит +%d АТК и +%d ЗАЩ до конца похода.", Run::kBuffAtk, Run::kBuffDef),
-            const int full = run_->reviveCoinCost();
+
+        const int full = run_->reviveCoinCost();
         const int baseChance = run_->reviveBaseChancePct();
         const int discounted = full * (100 - baseChance) / 100;
 
@@ -2174,11 +2170,7 @@ void Game::drawRestOverlay() {
 
     // ---------- стадия 2: воскрешение (только павшие) ----------
     if (restStage_ == 2) {
-        if (h.alive()) continue;   // живых в списке павших не показываем — или пропускаем строку
-        const int paid = run_->revivePaidCost(i);           // ← ВАШ ФРАГМЕНТ
-        const int chance = run_->reviveBaseChancePct();      // ← ВАШ ФРАГМЕНТ
-        drawText(fmt("Шанс: %d%%  |  Доплата: %d монет  |  Артефакт: 1",
-                chance, paid), rx + 74.f, ry + 30.f, 16, kDim);   // ← ВАШ ФРАГМЕНТ
+        if (h.alive()) continue;
 
         const int paid = run_->revivePaidCost(i);
         const int chance = run_->reviveBaseChancePct();
