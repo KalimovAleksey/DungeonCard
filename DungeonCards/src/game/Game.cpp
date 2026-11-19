@@ -976,7 +976,8 @@ void Game::updateRestChoice() {
             if (!anyDead) restMsg_ = "Павших героев нет.";
             else if (!anyRevive) restMsg_ = "Не хватает монет или артефактов.";
             else { restStage_ = 2; restMsg_.clear(); }
-}
+        }       
+        restStage_ = 0;
         return;
     }
 
@@ -2146,8 +2147,15 @@ void Game::drawRestOverlay() {
     const int req = std::min(Run::kBuffTargets, run_->party().aliveCount());
     int picked = 0;
     for (int i = 0; i < static_cast<int>(hs.size()) && i < kMaxRoster; ++i) picked += restPick_[i] ? 1 : 0;
-    drawTextCentered("КОГО УСИЛИТЬ?", cx, kGridY + 20.f, 34, kAccent);
-    drawTextCentered(fmt("Выбрано героев: %d из %d", picked, req), cx, kGridY + 66.f, 18, picked == req ? kGood : kDim);
+    if (restStage_ == 1) {
+        // Стадия усиления
+        drawTextCentered("КОГО УСИЛИТЬ?", cx, kGridY + 20.f, 34, kAccent);
+        drawTextCentered(fmt("Выбрано героев: %d из %d", picked, req), cx, kGridY + 66.f, 18, picked == req ? kGood : kDim);
+    } else if (restStage_ == 2) {
+        // Стадия воскрешения
+        drawTextCentered("КОГО ВОСКРЕСИТЬ?", cx, kGridY + 20.f, 34, kAccent);
+        drawTextCentered("Выберите павшего героя и способ оплаты", cx, kGridY + 66.f, 18, kDim);
+    }
 
     for (int i = 0; i < static_cast<int>(hs.size()) && i < kMaxRoster; ++i) {
     const Hero& h = hs[i];
