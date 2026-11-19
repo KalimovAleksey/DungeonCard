@@ -986,21 +986,28 @@ void Game::updateRestChoice() {
         for (int i = 0; i < (int)hs.size() && i < kMaxRoster; ++i)
             if (!hs[i].alive()) dead.push_back(i);
         if (IsKeyPressed(KEY_B) || dead.empty()) { restStage_ = 0; return; }
+
         const int rk[4] = {KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR};
         for (int k = 0; k < (int)dead.size(); ++k) {
             const int idx = dead[k];
             const int rx = kGridX + 40, ry = kGridY + 100 + k * 84;
+            
+            // Объявляем ОДИН РАЗ:
             const int paidCost = run_->revivePaidCost(idx);
+            // (переменная chance здесь не нужна, удалите её, если она есть)
+
             const bool onCoin = click && inRect(m, rx + 400, ry + 14, 112, 44);
             const bool onArtifact = click && inRect(m, rx + 520, ry + 14, 112, 44);
             const bool rowPick = (k < 4 && IsKeyPressed(rk[k])) ||
                                 (click && !onCoin && !onArtifact && inRect(m, rx, ry, 640, 72));
+
             bool useArtifact = onArtifact, useCoins = onCoin;
             if (rowPick) {
                 if (run_->party().coins >= paidCost) useCoins = true;
                 else useArtifact = true;
             }
             if (!useCoins && !useArtifact) continue;
+
             bool ok;
             if (useArtifact) {
                 ok = run_->restReviveArtifact(idx);
@@ -1008,11 +1015,13 @@ void Game::updateRestChoice() {
             } else {
                 ok = run_->restRevivePaid(idx);
             }
+
             if (ok)
                 restMsg_ = fmt("%s воскрешён: %d%% здоровья.", hs[idx].name.c_str(),
                             useArtifact ? Run::kReviveArtifactPct : Run::kRevivePct);
             else
                 restMsg_ = useArtifact ? "Нет артефактов." : "Не хватает монет.";
+                
             restStage_ = 0;
             return;
         }
@@ -2075,21 +2084,23 @@ void Game::drawRestOverlay() {
             fmt("Все живые герои восстанавливают %d%% максимального здоровья.", run_->restHealPct()),
             fmt("Выбери двух героев: каждый получит +%d АТК и +%d ЗАЩ до конца похода.", Run::kBuffAtk, Run::kBuffDef),
             const int full = run_->reviveCoinCost();
-            const int baseChance = run_->reviveBaseChancePct();
-            const int discounted = full * (100 - baseChance) / 100;
+        const int baseChance = run_->reviveBaseChancePct();
+        const int discounted = full * (100 - baseChance) / 100;
 
-            const std::string descs[3] = {
-                fmt("Все живые герои восстанавливают %d%% максимального здоровья.", run_->restHealPct()),
-                fmt("Выбери двух героев: каждый получит +%d АТК и +%d ЗАЩ до конца похода.", Run::kBuffAtk, Run::kBuffDef),
-                fmt("Базовый шанс %d%%%s. Доплата до 100%%: %d из %d монет. Или %d артефакт (%d%% ЗДР).",
-                    baseChance, baseChance >= 50 ? " (Жрец)" : "",
-                    discounted, full, Run::kReviveArtifactCost, Run::kReviveArtifactPct)
-            };
+        const std::string descs[3] = {
+            fmt("Все живые герои восстанавливают %d%% максимального здоровья.", run_->restHealPct()),
+            fmt("Выбери двух героев: каждый получит +%d АТК и +%d ЗАЩ до конца похода.", Run::kBuffAtk, Run::kBuffDef),
+            fmt("Базовый шанс %d%%%s. Доплата до 100%%: %d из %d монет. Или %d артефакт (%d%% ЗДР).",
+                baseChance, baseChance >= 50 ? " (Жрец)" : "",
+                discounted, full, Run::kReviveArtifactCost, Run::kReviveArtifactPct)
+        };
+        // -----------------------------------
+
         const Color titleCols[3] = {kHeal, kAccent, kCoin};
         for (int k = 0; k < 3; ++k) {
             const int bx = kGridX + 14 + k * 236;
             const bool enabled = k < 2 || canRevive;
-            const bool hover = inRect(m, bx, by, bw, bh);
+            const bool hover = inRect(m, bx, by, bw, bh) && enabled; // hover только для активных
             DrawRectangle(bx, by, bw, bh, hover ? Color{40, 48, 56, 255} : kPanel);
             DrawRectangleLines(bx, by, bw, bh, hover ? (enabled ? kAccent : kBad) : kGridLine);
             drawText(titles[k], static_cast<float>(bx + 14), static_cast<float>(by + 14), 22, enabled ? titleCols[k] : kDim);
