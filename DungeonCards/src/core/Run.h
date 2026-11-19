@@ -68,6 +68,8 @@ public:
     bool buy(int offerIndex);                         // купить лот: монеты -> предмет в рюкзак
     void leaveShop();
     bool forgeUpgrade(int bagIndex);
+    bool inForgeRoom() const;   // отряд стоит в комнате кузницы
+    bool openForge();  
     int forgePrice(const Item& it) const;
     void leaveForge();
     const std::vector<ShopOffer>* shopStock() const;  // лоты текущего торговца или nullptr
