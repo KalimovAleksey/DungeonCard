@@ -64,7 +64,8 @@ public:
     RunSummary summary() const;                      // итог для профиля (достижения)
     // --- торговец ---
     bool inShopRoom() const;                          // отряд стоит в комнате торговца
-    bool openShop();                                  // открыть торговлю (если стоим у торговца)
+    bool openShop();    
+    int effectivePrice(const ShopOffer& offer) const;                              // открыть торговлю (если стоим у торговца)
     bool buy(int offerIndex);                         // купить лот: монеты -> предмет в рюкзак
     void leaveShop();
     bool forgeUpgrade(int bagIndex);

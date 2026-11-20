@@ -321,13 +321,16 @@ bool Run::openShop() {
     phase_ = RunPhase::Shop;
     return true;
 }
+int Run::effectivePrice(const ShopOffer& offer) const {
+    return hasLivingBard() ? offer.price * 85 / 100 : offer.price;
+}
 
 bool Run::buy(int idx) {
     if (phase_ != RunPhase::Shop) return false;
     auto it = stocks_.find(pos_);
     if (it == stocks_.end() || idx < 0 || idx >= static_cast<int>(it->second.size())) return false;
     ShopOffer& o = it->second[idx];
-    const int price = hasLivingBard() ? o.price * 85 / 100 : o.price;
+    const int price = effectivePrice(o);
     if (o.sold || party_.coins < price) return false;
     party_.coins -= price;
     o.sold = true;

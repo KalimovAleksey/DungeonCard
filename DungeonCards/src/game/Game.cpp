@@ -1072,8 +1072,8 @@ void Game::updateShop() {
         const ShopOffer& o = (*stock)[i];
         if (o.sold) {
             shopMsg_ = "Этот лот уже продан.";
-        } else if (run_->party().coins < o.price) {
-            shopMsg_ = fmt("Не хватает монет: нужно %d, есть %d.", o.price, run_->party().coins);
+        } else if (run_->party().coins < run_->effectivePrice(o)) { 
+            shopMsg_ = fmt("Не хватает монет: нужно %d, есть %d.", run_->effectivePrice(o), run_->party().coins); 
         } else if (run_->buy(i)) {
             shopMsg_ = "Куплено: " + o.item.name + ". Надеть - в инвентаре (I).";
         }
@@ -2087,10 +2087,10 @@ void Game::drawRestOverlay() {
         for (int k = 0; k < 3; ++k) {
             const int bx = kGridX + 14 + k * 236;
             const bool enabled = k < 2 || canRevive;
-            const bool hover = inRect(m, bx, by, bw, bh);
-            DrawRectangle(bx, by, bw, bh, hover ? Color{40, 48, 56, 255} : kPanel);
-            DrawRectangleLines(bx, by, bw, bh, hover ? (enabled ? kAccent : kBad) : kGridLine);
-            drawText(titles[k], static_cast<float>(bx + 14), static_cast<float>(by + 14), 22, enabled ? titleCols[k] : kDim);
+            const bool hover = inRect(m, bx, by, bw, bh) && enabled;   // ← hover только для активных
+            DrawRectangle(bx, by, bw, bh, !enabled ? Color{26, 27, 34, 255} : hover ? Color{40, 48, 56, 255} : kPanel);
+            DrawRectangleLines(bx, by, bw, bh, !enabled ? kGridLine : hover ? kAccent : kGridLine);
+            // описание тоже приглушить:
             float ty = static_cast<float>(by + 56);
             for (const auto& l : wrap(descs[k], bw - 28.f, 16)) {
                 drawText(l, static_cast<float>(bx + 14), ty, 16, enabled ? kText : kDim);
@@ -2104,15 +2104,7 @@ void Game::drawRestOverlay() {
         }
         if (!restMsg_.empty()) drawText(restMsg_, kGridX + 16.f, kGridY + 358.f, 16, kAccent);
 
-        drawText("Состояние отряда", static_cast<float>(kGridX + 30), static_cast<float>(kGridY + 384), 16, kAccent);
-        for (int i = 0; i < static_cast<int>(hs.size()) && i < 4; ++i) {
-            const Hero& h = hs[i];
-            const int hx = kGridX + 30 + i * 172;
-            drawText(h.name, static_cast<float>(hx), static_cast<float>(kGridY + 410), 16, h.alive() ? kText : kDim);
-            drawBar(hx, kGridY + 434, 150, 9, h.maxHp ? static_cast<float>(h.hp) / h.maxHp : 0.f, kGood);
-            drawText(h.alive() ? fmt("%d/%d", h.hp, h.maxHp) : std::string("пал"), static_cast<float>(hx), static_cast<float>(kGridY + 448), 14,
-                     h.alive() ? kDim : kBad);
-        }
+        
         drawText("Состояние отряда", static_cast<float>(kGridX + 30), static_cast<float>(kGridY + 380), 16, kAccent);
         for (int i = 0; i < static_cast<int>(hs.size()) && i < 4; ++i) {
             const Hero& h = hs[i];
@@ -2282,7 +2274,9 @@ void Game::drawShop() {
         for (int i = 0; i < static_cast<int>(stock->size()); ++i) {
             const ShopOffer& o = (*stock)[i];
             const R r{kGridX + 20, kGridY + 88 + i * 76, 680, 68};
-            const bool afford = run_->party().coins >= o.price;
+            
+            const int finalPrice = run_->effectivePrice(o);
+            const bool afford = run_->party().coins >= finalPrice;   // ← по итоговой цене!     
             const bool hover = !o.sold && inR(m, r);
             if (hover) hoverItem = &o.item;
             DrawRectangle(r.x, r.y, r.w, r.h, o.sold ? Color{26, 28, 34, 255} : hover ? Color{42, 48, 58, 255} : kPanel);
@@ -2295,8 +2289,7 @@ void Game::drawShop() {
                 drawText("ПРОДАНО", r.x + r.w - 110.f, r.y + 22.f, 20, kDim);
             } else {
                 drawCoin(r.x + r.w - 118.f, r.y + 34.f, 10.f);
-                int finalPrice = o.price;
-                if (run_->hasLivingBard()) finalPrice = finalPrice * 85 / 100;
+                
 
                 if (run_->hasLivingBard()) {
                     drawText(fmt("%d", o.price), r.x + r.w - 100.f, r.y + 20.f, 16, kDim);
