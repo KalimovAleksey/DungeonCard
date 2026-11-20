@@ -87,6 +87,16 @@ void Run::enterRoom(Vec2i p) {
         phase_ = RunPhase::Shop;
         return;
     }
+    if (r->card.type == RoomType::Forge) {  // в кузницу можно возвращаться
+        if (!r->visited) {
+            r->visited = true;
+            say("Кузница! Выбери предмет в рюкзаке для улучшения.");
+        } else {
+            say("Снова у кузницы.");
+        }
+        phase_ = RunPhase::ForgeChoice;
+        return;
+    }
     if (r->visited) return;
     r->visited = true;
     const int d = r->card.difficulty;
@@ -117,13 +127,20 @@ void Run::enterRoom(Vec2i p) {
             phase_ = RunPhase::BossIntro;
             say(fmt("Логово босса: %s. Подготовь отряд!", bossInfo(pendingBoss_).name.c_str()));
             break;
-        case RoomType::Forge:
-            phase_ = RunPhase::ForgeChoice;
-            say("Кузница! Выбери предмет в рюкзаке для улучшения.");
-            break;
+        
         default:
             break;
     }
+}
+bool Run::inForgeRoom() const {
+    const Room* r = dungeon_.roomAt(pos_);
+    return r && r->card.type == RoomType::Forge;
+}
+
+bool Run::openForge() {
+    if (phase_ != RunPhase::Exploring || combat_ || !inForgeRoom()) return false;
+    phase_ = RunPhase::ForgeChoice;
+    return true;
 }
 
 // ------------------------------------------------------------------ бой

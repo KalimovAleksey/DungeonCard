@@ -57,7 +57,7 @@ Color roomColor(RoomType t) {
         case RoomType::Start:    return {90, 110, 150, 255};
         case RoomType::Combat:   return {170, 70, 70, 255};
         case RoomType::Treasure: return {200, 165, 60, 255};
-        case RoomType::Trap:     return {185, 105, 45, 255};
+        case RoomType::Trap:     return {10, 250, 85, 255};
         case RoomType::Rest:     return {70, 150, 90, 255};
         case RoomType::Boss:     return {135, 55, 165, 255};
         case RoomType::Shop:     return {55, 160, 175, 255};
@@ -789,6 +789,7 @@ void Game::updateBuild() {
 // ------------------------------------------------------------------- поход
 
 void Game::updateForge() {
+    if (invSel_ >= static_cast<int>(run_->party().bag.size())) invSel_ = -1;
     const Vector2 m = mouse();
     if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_ESCAPE)) {
         run_->leaveForge();
@@ -933,6 +934,10 @@ void Game::updateExplore(float dt) {
         shopMsg_.clear();
         return;
     }
+    if (IsKeyPressed(KEY_G) && run_->openForge()) {   // G - кузница (T занят торговцем)
+    forgeMsg_.clear();
+    return;
+}
     moveCd_ = std::max(0.f, moveCd_ - dt);
     if (moveCd_ > 0.f) return;
     Dir d;
@@ -2332,6 +2337,7 @@ void Game::drawRunView() {
     drawText(fmt("Рюкзак: %d предм.   Зелий: %d   Монеты: %d   [I] - инвентарь", static_cast<int>(r.party().bag.size()),
                  r.party().potionCount(), r.party().coins), kGridX, kCardY - 14.f, 16, r.hasNewLoot() ? kAccent : kDim);
     if (exploring && r.inShopRoom()) drawText("Торговец рядом: T - торговать", kGridX, kCardY - 34.f, 16, kCoin);
+    if (exploring && r.inForgeRoom()) drawText("Кузница рядом: G - улучшить предмет", kGridX, kCardY - 54.f, 16, roomColor(RoomType::Forge));
     float lx = kGridX, ly = kCardY + 10.f;
     int shown = 0;
     drawText("Недавняя добыча:", lx, ly, 14, kDim);
@@ -2353,6 +2359,7 @@ void Game::drawRunView() {
     else if (invOpen_) drawInventory();
     else if (r.phase() == RunPhase::BossIntro) drawBossIntro();
     else if (r.phase() == RunPhase::Shop) drawShop();
+    else if (r.phase() == RunPhase::ForgeChoice) drawForge();
 
     DrawRectangle(kPanelX - 10, 10, kPanelW + 20, kScreenH - 20, kPanel);
     float y = 20;
@@ -2392,7 +2399,8 @@ void Game::drawRunView() {
     }
 
     const char* hint = r.phase() == RunPhase::Fighting ? "Пробел - пауза   Вверх/Вниз - скорость боя   Esc - меню"
-                                                       : "WASD - идти   I - инвентарь   T - торговец   Esc - меню";
+                  : r.phase() == RunPhase::ForgeChoice ? "Клик по предмету - улучшить   Enter/Esc - уйти   I - инвентарь"
+                  : "WASD - идти   I - инвентарь   T - торговец   G - кузница   Esc - меню";
     drawText(hint, kPanelX, kScreenH - 40.f, 15, kDim);
 }
 
