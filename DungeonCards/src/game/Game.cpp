@@ -513,6 +513,10 @@ void Game::afterBuildAction() {
 // ------------------------------------------------------------------- update
 
 void Game::update(float dt) {
+    if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_L)) {
+        devOpen_ = !devOpen_;
+        devMsg_ = devOpen_ ? "Режим разработчика включён." : "";
+    }
     // Esc: пауза во время игры, назад из меню/настроек
     if (IsKeyPressed(KEY_ESCAPE)) {
         switch (screen_) {
@@ -537,16 +541,19 @@ void Game::update(float dt) {
         setMessage("Выбери четырёх героев и босса для похода.", false);
         return;
     }
-    switch (screen_) {
-        case Screen::MainMenu: updateMainMenu(); break;
-        case Screen::Select: updateSelect(); break;
-        case Screen::Build: updateBuild(); break;
-        case Screen::Run: updateRun(dt); break;
-        case Screen::Pause: updatePause(); break;
-        case Screen::Settings: updateSettings(); break;
-        case Screen::Achievements: updateAchievements(); break;
-        case Screen::Legacy: updateLegacy(); break;
-        case Screen::Result: break;
+    const bool devConsumed = updateDevPanel();
+    if (!devConsumed) {
+        switch (screen_) {
+            case Screen::MainMenu: updateMainMenu(); break;
+            case Screen::Select: updateSelect(); break;
+            case Screen::Build: updateBuild(); break;
+            case Screen::Run: updateRun(dt); break;
+            case Screen::Pause: updatePause(); break;
+            case Screen::Settings: updateSettings(); break;
+            case Screen::Achievements: updateAchievements(); break;
+            case Screen::Legacy: updateLegacy(); break;
+            case Screen::Result: break;
+        }
     }
 }
 
@@ -1029,7 +1036,7 @@ void Game::updateRestChoice() {
         return;
     }
 
-    // стадия 2: выбор павшего героя для воскрешения (платная услуга, привал продолжается)
+    // стадия 2: выбор павшего героя и способа оплаты (монеты или артефакт)
     if (restStage_ == 2) {
         std::vector<int> dead;
         for (int i = 0; i < static_cast<int>(hs.size()) && i < kMaxRoster; ++i)
@@ -1038,34 +1045,33 @@ void Game::updateRestChoice() {
             restStage_ = 0;
             return;
         }
-        const int rk[4] = {KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR};
         for (int k = 0; k < static_cast<int>(dead.size()); ++k) {
+            const int heroIdx = dead[k];
             const int rx = kGridX + 40, ry = kGridY + 100 + k * 84;
             const bool onCoin = click && inRect(m, rx + 400, ry + 14, 112, 44);
             const bool onArtifact = click && inRect(m, rx + 520, ry + 14, 112, 44);
-            const bool rowPick = (k < 4 && IsKeyPressed(rk[k])) || (click && !onCoin && !onArtifact && inRect(m, rx, ry, 640, 72));
-            bool useArtifact = onArtifact, useCoins = onCoin;
-            if (rowPick) {  // клик по строке / клавиша: сначала монеты, если не хватает - артефакт
-                if (run_->party().coins >= run_->reviveCoinCost()) useCoins = true;
-                else useArtifact = true;
-            }
-            if (!useCoins && !useArtifact) continue;
-            bool ok;
-            if (useArtifact) {
-                ok = run_->restReviveArtifact(dead[k]);
-                if (ok) {  // артефакты - постоянная валюта: трата сохраняется сразу
+            if (!onCoin && !onArtifact) continue;
+
+            bool ok = false;
+            bool usedArtifact = false;
+            if (onArtifact) {
+                ok = run_->restReviveArtifact(heroIdx);
+                usedArtifact = true;
+                if (ok) {
                     profile_.artifacts = run_->artifacts();
                     saveProfile();
                 }
             } else {
-                ok = run_->restRevive(dead[k]);
+                ok = run_->restRevive(heroIdx);
             }
-            if (ok)
-                restMsg_ = fmt("%s воскрешён: %d%% здоровья.", hs[dead[k]].name.c_str(),
-                               useArtifact ? Run::kReviveArtifactPct : Run::kRevivePct);
-            else
-                restMsg_ = useArtifact ? "Нет артефактов." : "Не хватает монет.";
-            restStage_ = 0;
+
+            if (ok) {
+                restMsg_ = fmt("%s воскрешён: %d%% здоровья.", hs[heroIdx].name.c_str(),
+                               usedArtifact ? Run::kReviveArtifactPct : Run::kRevivePct);
+                restStage_ = 0;
+            } else {
+                restMsg_ = usedArtifact ? "Нет артефактов." : "Не хватает монет.";
+            }
             return;
         }
         return;
@@ -1124,6 +1130,110 @@ void Game::updateShop() {
         }
         return;
     }
+}
+
+static R devRect() { return {20, 360, 360, 330}; }
+
+bool Game::updateDevPanel() {
+    if (!devOpen_) return false;
+    const R panel = devRect();
+    const Vector2 m = mouse();
+    const bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    if (!click) return false;
+    if (!inR(m, panel)) return false;
+
+    // tier buttons
+    for (int t = 1; t <= 4; ++t) {
+        R r{panel.x + 12 + (t - 1) * 84, panel.y + 62, 76, 30};
+        if (inR(m, r)) { devItemTier_ = t; devMsg_ = fmt("Тир предметов: %d", t); return true; }
+    }
+
+    // item buttons
+    struct Btn { ItemKind kind; bool potion; };
+    const Btn btns[] = {
+        {ItemKind::Weapon, false},
+        {ItemKind::Armor, false},
+        {ItemKind::Relic, false},
+        {ItemKind::Potion, true},
+    };
+    for (int i = 0; i < 4; ++i) {
+        R r{panel.x + 12 + (i % 2) * 168, panel.y + 102 + (i / 2) * 36, 160, 30};
+        if (!inR(m, r)) continue;
+        if (!run_) { devMsg_ = "Нет активного забега."; return true; }
+        Rng rr(static_cast<uint32_t>(GetTime() * 1000.0) + static_cast<uint32_t>(i * 101 + devItemTier_));
+        Item it = btns[i].potion ? makePotion(devItemTier_) : rollLoot(rr, devItemTier_);
+        if (!btns[i].potion) it.kind = btns[i].kind;
+        run_->partyMutable().bag.push_back(it);
+        devMsg_ = "Добавлено: " + it.name;
+        return true;
+    }
+
+    // gold
+    if (inR(m, {panel.x + 12, panel.y + 182, 160, 30})) {
+        if (!run_) { devMsg_ = "Нет активного забега."; return true; }
+        run_->grantCoins(50);
+        devMsg_ = fmt("Золото: %d (+50)", run_->party().coins);
+        return true;
+    }
+    if (inR(m, {panel.x + 180, panel.y + 182, 160, 30})) {
+        if (!run_) { devMsg_ = "Нет активного забега."; return true; }
+        run_->partyMutable().coins = std::max(0, run_->party().coins - 50);
+        devMsg_ = fmt("Золото: %d (-50)", run_->party().coins);
+        return true;
+    }
+
+    // heroes heal/kill
+    if (!run_) { devMsg_ = "Нет активного забега."; return true; }
+    auto& heroes = run_->partyMutable().heroes;
+    for (int i = 0; i < static_cast<int>(heroes.size()) && i < kMaxRoster; ++i) {
+        R heal{panel.x + 220, panel.y + 252 + i * 18, 56, 16};
+        R kill{panel.x + 282, panel.y + 252 + i * 18, 56, 16};
+        if (inR(m, heal)) {
+            heroes[i].hp = heroes[i].maxHp;
+            heroes[i].away = false;
+            devMsg_ = heroes[i].name + ": вылечен.";
+            return true;
+        }
+        if (inR(m, kill)) {
+            heroes[i].hp = 0;
+            devMsg_ = heroes[i].name + ": убит.";
+            return true;
+        }
+    }
+    return true;
+}
+
+void Game::drawDevPanel() {
+    const R panel = devRect();
+    DrawRectangle(panel.x, panel.y, panel.w, panel.h, Color{18, 20, 28, 245});
+    DrawRectangleLines(panel.x, panel.y, panel.w, panel.h, Color{255, 120, 120, 255});
+    drawText("DEV (Ctrl+L)", panel.x + 12.f, panel.y + 10.f, 22, Color{255, 140, 140, 255});
+    drawText(fmt("Тир: %d", devItemTier_), panel.x + 170.f, panel.y + 14.f, 16, kDim);
+
+    for (int t = 1; t <= 4; ++t) {
+        R r{panel.x + 12 + (t - 1) * 84, panel.y + 62, 76, 30};
+        drawButton(r.x, r.y, r.w, r.h, fmt("T%d", t), devItemTier_ == t, true);
+    }
+    const char* labels[4] = {"Оружие", "Броня", "Реликвия", "Зелье"};
+    for (int i = 0; i < 4; ++i) {
+        R r{panel.x + 12 + (i % 2) * 168, panel.y + 102 + (i / 2) * 36, 160, 30};
+        drawButton(r.x, r.y, r.w, r.h, labels[i], false, run_ != nullptr);
+    }
+    drawButton(panel.x + 12, panel.y + 182, 160, 30, "+50 золота", false, run_ != nullptr);
+    drawButton(panel.x + 180, panel.y + 182, 160, 30, "-50 золота", false, run_ != nullptr);
+    drawText("Герои: ЛКМ лечить / убить", panel.x + 12.f, panel.y + 224.f, 14, kDim);
+    if (run_) {
+        const auto& heroes = run_->party().heroes;
+        for (int i = 0; i < static_cast<int>(heroes.size()) && i < kMaxRoster; ++i) {
+            const auto& h = heroes[i];
+            drawText(fmt("%-10s %3d/%3d", h.name.c_str(), std::max(0, h.hp), h.maxHp), panel.x + 12.f, panel.y + 252.f + i * 18.f, 14, h.alive() ? kText : kBad);
+            drawButton(panel.x + 220, panel.y + 252 + i * 18, 56, 16, "леч", false, true);
+            drawButton(panel.x + 282, panel.y + 252 + i * 18, 56, 16, "убить", false, true);
+        }
+    } else {
+        drawText("Открой забег для действий с героями.", panel.x + 12.f, panel.y + 252.f, 14, kDim);
+    }
+    if (!devMsg_.empty()) drawText(devMsg_, panel.x + 12.f, panel.y + panel.h - 24.f, 14, Color{255, 200, 160, 255});
 }
 
 // Инвентарь: выбрать предмет в рюкзаке, затем кликнуть слот героя (оружие/броня/реликвия)
@@ -1602,6 +1712,7 @@ void Game::draw() {
             break;
         default: drawScreen(screen_); break;
     }
+    if (devOpen_) drawDevPanel();
 }
 
 void Game::drawScreen(Screen sc) {
@@ -2176,6 +2287,44 @@ void Game::drawRestOverlay() {
             drawBar(hx, kGridY + 430, 150, 9, h.maxHp ? static_cast<float>(h.hp) / h.maxHp : 0.f, kGood);
             drawText(fmt("%d/%d", std::max(0, h.hp), h.maxHp), static_cast<float>(hx), static_cast<float>(kGridY + 444), 14, kDim);
         }
+        return;
+    }
+
+    if (restStage_ == 2) {
+        drawTextCentered("ВОСКРЕШЕНИЕ", cx, kGridY + 22.f, 34, kCoin);
+        drawTextCentered("Выбери павшего героя и способ оплаты", cx, kGridY + 64.f, 18, kDim);
+        drawCoin(kGridX + 560.f, kGridY + 30.f, 10.f);
+        drawText(fmt("%d", run_->party().coins), kGridX + 576.f, kGridY + 18.f, 20, kCoin);
+        drawArtifact(kGridX + 640.f, kGridY + 30.f, 10.f);
+        drawText(fmt("%d", run_->artifacts()), kGridX + 656.f, kGridY + 18.f, 20, Color{190, 150, 255, 255});
+
+        std::vector<int> dead;
+        for (int i = 0; i < static_cast<int>(hs.size()) && i < kMaxRoster; ++i)
+            if (!hs[i].alive()) dead.push_back(i);
+        if (dead.empty()) {
+            drawTextCentered("Павших героев нет.", cx, kGridY + 180.f, 22, kDim);
+        }
+        for (int k = 0; k < static_cast<int>(dead.size()); ++k) {
+            const int i = dead[k];
+            const Hero& h = hs[i];
+            const int rx = kGridX + 40, ry = kGridY + 100 + k * 84;
+            DrawRectangle(rx, ry, 640, 72, kPanel);
+            DrawRectangleLines(rx, ry, 640, 72, kGridLine);
+            drawIconBox(heroArt(h.role), "", Color{70, 70, 78, 255}, firstGlyph(h.name),
+                        rx + 12.f, ry + 12.f, 48.f, Color{150, 150, 160, 255});
+            drawText(fmt("%s  (пал)", h.name.c_str()), static_cast<float>(rx + 74), static_cast<float>(ry + 10), 22, kDim);
+            drawText(fmt("После воскрешения: %d%% или %d%% ЗДР", Run::kRevivePct, Run::kReviveArtifactPct),
+                     static_cast<float>(rx + 74), static_cast<float>(ry + 40), 15, kDim);
+
+            const bool canCoin = run_->party().coins >= run_->reviveCoinCost();
+            const bool canArt = run_->artifacts() >= Run::kReviveArtifactCost;
+            R coinBtn{rx + 400, ry + 14, 112, 44};
+            R artBtn{rx + 520, ry + 14, 112, 44};
+            drawButton(coinBtn.x, coinBtn.y, coinBtn.w, coinBtn.h, fmt("%d мон.", run_->reviveCoinCost()), false, canCoin);
+            drawButton(artBtn.x, artBtn.y, artBtn.w, artBtn.h, fmt("%d арт.", Run::kReviveArtifactCost), false, canArt);
+        }
+        if (!restMsg_.empty()) drawTextCentered(restMsg_, cx, kGridY + kArenaH - 62.f, 16, kAccent);
+        drawTextCentered("Клик по кнопке оплаты    B - назад", cx, kGridY + kArenaH - 36.f, 18, kAccent);
         return;
     }
 

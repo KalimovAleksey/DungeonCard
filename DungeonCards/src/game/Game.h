@@ -131,6 +131,7 @@ private:
     void updateShop();
     void updateForge();
     void updateBossReward();
+    bool updateDevPanel();
     void onRunStep();
     void spawnActions();
     void updateAnims(float dt);
@@ -148,6 +149,7 @@ private:
     void drawShop();
     void drawForge();
     void drawBossReward();
+    void drawDevPanel();
     void drawBossCard(int x, int y, int w, int h, int bossId) const;
     void drawBossIntro();
     void drawResult();
@@ -265,6 +267,11 @@ private:
     std::vector<Floater> floaters_;
     Flash heroFlash_[kMaxRoster];
     Flash enemyFlash_[kMaxRoster];
+
+    // интерфейс разработчика
+    bool devOpen_ = false;
+    int devItemTier_ = 4;
+    std::string devMsg_;
 };
 
 }  // namespace dc

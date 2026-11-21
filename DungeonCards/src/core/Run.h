@@ -84,6 +84,7 @@ public:
     void leaveForge();
     const std::vector<ShopOffer>* shopStock() const;  // лоты текущего торговца или nullptr
     void grantCoins(int n) { party_.coins += n; }     // для тестов и отладки
+    Party& partyMutable() { return party_; }
     // --- инвентарь (доступен вне боя, у торговца и на карточке босса) ---
     bool canManage() const;
     bool equipItem(int bagIndex, int heroIndex);
