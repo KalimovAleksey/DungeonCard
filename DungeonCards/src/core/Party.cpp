@@ -108,7 +108,7 @@ std::vector<Hero> heroRoster() {
 
 // ------------------------------------------------------------------- loot
 
-Item rollLoot(Rng& rng, int tier) {
+Item rollLootOfKind(Rng& rng, ItemKind kind, int tier) {
     tier = std::max(1, std::min(4, tier));
     static const char* weapons[4] = {"Ржавый меч", "Стальной клинок", "Зачарованный клинок", "Клинок героя"};
     static const char* armors[4]  = {"Кожаная куртка", "Кольчуга", "Латы", "Драконья чешуя"};
@@ -117,17 +117,14 @@ Item rollLoot(Rng& rng, int tier) {
 
     Item it;
     it.tier = tier;
-    int r = rng.range(1, 100);
-    if (r <= 32) {
-        it.kind = ItemKind::Weapon;
+    it.kind = kind;
+    if (kind == ItemKind::Weapon) {
         it.name = weapons[tier - 1];
         it.power = tier * 2 + rng.range(0, 1);
-    } else if (r <= 60) {
-        it.kind = ItemKind::Armor;
+    } else if (kind == ItemKind::Armor) {
         it.name = armors[tier - 1];
         it.power = tier + rng.range(0, 1);
-    } else if (r <= 82) {
-        it.kind = ItemKind::Relic;
+    } else if (kind == ItemKind::Relic) {
         int e = rng.range(0, 3);
         it.relic = static_cast<RelicEffect>(e);
         it.name = relics[e];
@@ -138,11 +135,20 @@ Item rollLoot(Rng& rng, int tier) {
             case RelicEffect::Vampire:  it.power = 7 * tier; break;
         }
     } else {
-        it.kind = ItemKind::Potion;
         it.name = potions[tier - 1];
         it.power = 10 * tier;
     }
     return it;
+}
+
+Item rollLoot(Rng& rng, int tier) {
+    tier = std::max(1, std::min(4, tier));
+    int r = rng.range(1, 100);
+    ItemKind kind = (r <= 32) ? ItemKind::Weapon
+                  : (r <= 60) ? ItemKind::Armor
+                  : (r <= 82) ? ItemKind::Relic
+                              : ItemKind::Potion;
+    return rollLootOfKind(rng, kind, tier);
 }
 
 Item makePotion(int tier) {

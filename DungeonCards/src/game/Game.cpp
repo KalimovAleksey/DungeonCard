@@ -850,8 +850,8 @@ void Game::updateBossReward() {
         }
         return;
     }
-    const R cont{kGridX + 40, kGridY + 420, 300, 52};
-    const R end{kGridX + 380, kGridY + 420, 300, 52};
+    const R cont{kGridX + 40, kGridY + 240, 300, 52};
+    const R end{kGridX + 380, kGridY + 240, 300, 52};
     if (click && inR(m, cont)) {
         // Записываем победу над боссом/этажом, но не завершаем забег
         if (!run_->bossRewardRecorded()) {
@@ -1161,8 +1161,7 @@ bool Game::updateDevPanel() {
         if (!inR(m, r)) continue;
         if (!run_) { devMsg_ = "Нет активного забега."; return true; }
         Rng rr(static_cast<uint32_t>(GetTime() * 1000.0) + static_cast<uint32_t>(i * 101 + devItemTier_));
-        Item it = btns[i].potion ? makePotion(devItemTier_) : rollLoot(rr, devItemTier_);
-        if (!btns[i].potion) it.kind = btns[i].kind;
+        Item it = btns[i].potion ? makePotion(devItemTier_) : rollLootOfKind(rr, btns[i].kind, devItemTier_);
         run_->partyMutable().bag.push_back(it);
         devMsg_ = "Добавлено: " + it.name;
         return true;
