@@ -135,8 +135,8 @@ bool inRect(Vector2 m, int x, int y, int w, int h) { return inR(m, {x, y, w, h})
 // кнопки меню
 R menuBtn(int i, int y0 = 300) { return {490, y0 + i * 72, 300, 56}; }
 
-// экран достижений: два столбца по 9 строк; экран «Наследие»: два столбца карточек
-R achRow(int i) { return {40 + (i / 9) * 620, 130 + (i % 9) * 58, 600, 54}; }
+// экран достижений: два столбца, строки вниз (со скроллом); экран «Наследие»: два столбца карточек
+R achRow(int i) { return {40 + (i % 2) * 620, 130 + (i / 2) * 58, 600, 54}; }
 R legacyCard(int i) { return {40 + (i / 6) * 620, 124 + (i % 6) * 86, 600, 80}; }
 R legacyBuyBtn(int i) {
     R c = legacyCard(i);
@@ -369,6 +369,8 @@ void Game::resetForNewRun(uint32_t seed) {
     defeatedBosses_.clear();
     for (int i = 0; i < kMaxRoster; ++i) chosen_[i] = (i < kPartySize);
     run_.reset();
+    lastReward_ = RunReward{};
+    runRecorded_ = false;
     clearAnims();
 
     // сброс состояния UI/боя
@@ -562,6 +564,7 @@ void Game::updateMainMenu() {
         setMessage("Выбери четырёх героев и босса для похода.", false);
         screen_ = Screen::Select;
     } else if (pick == 1) {
+        achScroll_ = 0.f;
         screen_ = Screen::Achievements;
     } else if (pick == 2) {
         legacyMsg_.clear();
@@ -576,6 +579,15 @@ void Game::updateMainMenu() {
 
 // Достижения: просмотр списка (награда выдаётся автоматически при выполнении условия).
 void Game::updateAchievements() {
+    const float wheel = GetMouseWheelMove();
+    if (wheel != 0.f) achScroll_ -= wheel * 40.f;
+    if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_PAGE_DOWN)) achScroll_ += 40.f;
+    if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_PAGE_UP)) achScroll_ -= 40.f;
+    const int total = static_cast<int>(achievements().size());
+    const int rows = (total + 1) / 2;
+    const float contentH = 130.f + rows * 58.f + 20.f;
+    const float maxScroll = std::max(0.f, contentH - (kScreenH - 70.f));
+    achScroll_ = std::max(0.f, std::min(achScroll_, maxScroll));
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && inR(mouse(), kBackBtn)) screen_ = Screen::MainMenu;
 }
 
@@ -814,6 +826,43 @@ void Game::updateForge() {
     }
 }
 
+void Game::updateBossReward() {
+    const Vector2 m = mouse();
+    const bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    const auto& opts = run_->bossRewardOptions();
+    const int baseY = kGridY + 170;
+    if (!run_->bossRewardClaimed()) {
+        for (int i = 0; i < static_cast<int>(opts.size()) && i < 3; ++i) {
+            const R r{kGridX + 22 + i * 228, baseY, 214, 240};
+            if (click && inR(m, r)) { run_->claimBossRewardItem(i); return; }
+        }
+        const R art{kGridX + 22, baseY + 260, 680, 54};
+        if (click && inR(m, art)) {
+            if (run_->claimBossRewardArtifacts()) { profile_.artifacts += 3; profile_.artifactsEarned += 3; saveProfile(); }
+            return;
+        }
+        return;
+    }
+    const R cont{kGridX + 40, kGridY + 420, 300, 52};
+    const R end{kGridX + 380, kGridY + 420, 300, 52};
+    if (click && inR(m, cont)) {
+        // Записываем победу над боссом/этажом, но не завершаем забег
+        if (!run_->bossRewardRecorded()) {
+            lastReward_ = profile_.recordFloorClear(run_->summary());
+            run_->markBossRewardRecorded();
+            saveProfile();
+        }
+        if (std::find(defeatedBosses_.begin(), defeatedBosses_.end(), bossId_) == defeatedBosses_.end()) defeatedBosses_.push_back(bossId_);
+        run_->finishRunAfterBoss(false);
+        ++currentFloor_;
+        screen_ = Screen::Select;
+        rollRun();
+        setMessage(fmt("Этаж %d. Выбери следующего босса.", currentFloor_), false);
+    } else if (click && inR(m, end)) {
+        run_->finishRunAfterBoss(true);
+    }
+}
+
 void Game::updateRun(float dt) {
     if (IsKeyPressed(KEY_SPACE)) paused_ = !paused_;
     if (IsKeyPressed(KEY_UP) && speedIdx_ < 4) ++speedIdx_;
@@ -905,6 +954,10 @@ void Game::updateRun(float dt) {
             if (invOpen_) updateInventory();
             else updateForge();
             break;
+        case RunPhase::BossReward:
+            if (invOpen_) updateInventory();
+            else updateBossReward();
+            break;
         default:
             break;
     }
@@ -912,18 +965,10 @@ void Game::updateRun(float dt) {
     if (run_->finished()) {
         endTimer_ += dt;
         if (endTimer_ > 1.6f) {
-            if (run_->phase() == RunPhase::Victory) {
-                if (std::find(defeatedBosses_.begin(), defeatedBosses_.end(), bossId_) == defeatedBosses_.end()) {
-                    defeatedBosses_.push_back(bossId_);
-                }
-                currentFloor_++;
-                screen_ = Screen::Select;
-                rollRun();
-            } else {
-                screen_ = Screen::Result;
-                resultWin_ = false;
-                resultText_.clear();
-            }
+            recordRunResult();
+            resultWin_ = run_->phase() == RunPhase::Victory;
+            screen_ = Screen::Result;
+            resultText_.clear();
         }
     }
 }
@@ -1626,15 +1671,23 @@ void Game::drawAchievements() {
     drawArtifact(kScreenW - 220.f, 36.f, 14.f);
     drawText(fmt("Артефакты: %d", profile_.artifacts), kScreenW - 198.f, 24.f, 24, Color{190, 150, 255, 255});
 
-    const Vector2 m = mouse();
-    (void)m;
-    for (int i = 0; i < static_cast<int>(list.size()); ++i) {
+    const int total = static_cast<int>(list.size());
+    const int rows = (total + 1) / 2;
+    const float contentH = 130.f + rows * 58.f + 20.f;
+    const float viewTop = 120.f;
+    const float viewBottom = 650.f;
+    const float maxScroll = std::max(0.f, contentH - (kScreenH - 70.f));
+    const float scroll = std::max(0.f, std::min(achScroll_, maxScroll));
+
+    BeginScissorMode(0, static_cast<int>(viewTop), kScreenW, static_cast<int>(viewBottom - viewTop));
+    for (int i = 0; i < total; ++i) {
         const Achievement& a = list[i];
-        const R r = achRow(i);
+        R r = achRow(i);
+        r.y -= static_cast<int>(scroll);
+        if (r.y + r.h < static_cast<int>(viewTop) - 10 || r.y > static_cast<int>(viewBottom) + 10) continue;
         const bool done = profile_.isUnlocked(a.id);
         DrawRectangle(r.x, r.y, r.w, r.h, done ? Color{30, 44, 36, 255} : kPanel);
         DrawRectangleLines(r.x, r.y, r.w, r.h, done ? kGood : kGridLine);
-        // отметка выполнения: зелёный квадрат / пустая рамка
         DrawRectangle(r.x + 10, r.y + 13, 28, 28, done ? kGood : Color{40, 42, 54, 255});
         DrawRectangleLines(r.x + 10, r.y + 13, 28, 28, done ? kGood : kDim);
         if (done) drawTextCentered("+", r.x + 24.f, r.y + 14.f, 24, {20, 30, 24, 255});
@@ -1648,6 +1701,16 @@ void Game::drawAchievements() {
         }
         drawArtifact(r.x + r.w - 56.f, r.y + r.h / 2.f, 10.f);
         drawText(fmt("+%d", a.reward), r.x + r.w - 40.f, r.y + 14.f, 24, done ? Color{190, 150, 255, 255} : kDim);
+    }
+    EndScissorMode();
+
+    if (maxScroll > 0.f) {
+        const float barX = kScreenW - 24.f, barY = viewTop, barH = viewBottom - viewTop;
+        DrawRectangle(static_cast<int>(barX), static_cast<int>(barY), 6, static_cast<int>(barH), Color{35, 37, 48, 255});
+        const float thumbH = std::max(30.f, barH * (barH / (barH + maxScroll)));
+        const float thumbY = barY + (barH - thumbH) * (scroll / maxScroll);
+        DrawRectangle(static_cast<int>(barX), static_cast<int>(thumbY), 6, static_cast<int>(thumbH), kAccent);
+        drawTextCentered("Колесо/стрелки - листать", kScreenW / 2.f, 106.f, 14, kDim);
     }
     drawButton(kBackBtn.x, kBackBtn.y, kBackBtn.w, kBackBtn.h, "Назад", false, true);
 }
@@ -1764,7 +1827,7 @@ void Game::drawBossIntro() {
 void Game::drawSelect() {
     drawText("ВЫБОР ОТРЯДА", kSelX, 20, 32, kAccent);
     if (currentFloor_ == 1) {
-        drawText("Выбери четырёх героев (клик или 1-8) и одного из трёх боссов (Q/W/E). Enter - начать. Состав решает исход боя!",
+        drawText("Выбери четырёх героев (клик или 1-9) и одного из трёх боссов (Q/W/E). Enter - начать. Состав решает исход боя!",
                  kSelX, 60, 16, kDim);
     } else {
         drawText(fmt("ЭТАЖ %d. Выбери следующего босса (Q/W/E). Отряд сохраняется с прошлого этажа.", currentFloor_),
@@ -2210,6 +2273,55 @@ void Game::drawInventory() {
     if (hoverItem) drawItemTooltip(*hoverItem, m);
 }
 
+void Game::drawBossReward() {
+    const Vector2 m = mouse();
+    drawBackground("backgrounds/arena.png", kGridX, kGridY, kArenaW, kArenaH);
+    DrawRectangle(kGridX, kGridY, kArenaW, kArenaH, tex("backgrounds/arena.png") ? Color{10, 12, 18, 180} : Color{20, 22, 30, 255});
+    DrawRectangleLines(kGridX, kGridY, kArenaW, kArenaH, kAccent);
+    drawText("НАГРАДА ЗА БОССА", kGridX + 20.f, kGridY + 12.f, 32, kAccent);
+    drawText("Выбери: 1 предмет 4 тира из 3 или +3 артефакта.", kGridX + 22.f, kGridY + 56.f, 18, kDim);
+
+    const auto& opts = run_->bossRewardOptions();
+    const int baseY = kGridY + 110;
+    if (!run_->bossRewardClaimed()) {
+        for (int i = 0; i < static_cast<int>(opts.size()) && i < 3; ++i) {
+            const Item& it = opts[i];
+            const R r{kGridX + 22 + i * 228, baseY, 214, 240};
+            const bool hover = inR(m, r);
+            DrawRectangle(r.x, r.y, r.w, r.h, hover ? Color{46, 52, 66, 255} : kPanel);
+            DrawRectangleLines(r.x, r.y, r.w, r.h, hover ? kAccent : tierColor(it.tier));
+            drawBagCell(r.x + 75, r.y + 18, 64, &it, false, hover);
+            drawTextCentered(it.name, r.x + r.w / 2.f, r.y + 96.f, 18, kText);
+            drawTextCentered(itemKindName(it.kind), r.x + r.w / 2.f, r.y + 122.f, 15, kDim);
+            for (const auto& line : wrap(itemBonusText(it), r.w - 20.f, 14)) {
+                drawTextCentered(line, r.x + r.w / 2.f, r.y + 150.f, 14, kGood);
+                break;
+            }
+            drawTextCentered("Выбрать", r.x + r.w / 2.f, r.y + 210.f, 18, hover ? kAccent : kText);
+        }
+        const R art{kGridX + 22, baseY + 260, 680, 54};
+        const bool hoverA = inR(m, art);
+        DrawRectangle(art.x, art.y, art.w, art.h, hoverA ? Color{60, 46, 78, 255} : kPanel);
+        DrawRectangleLines(art.x, art.y, art.w, art.h, hoverA ? Color{190,150,255,255} : kGridLine);
+        drawArtifact(art.x + 28.f, art.y + 27.f, 10.f);
+        drawText("+3 артефакта", art.x + 50.f, art.y + 16.f, 24, Color{190,150,255,255});
+        drawTextCentered("I - инвентарь, чтобы сразу надеть предмет", kGridX + kArenaW / 2.f, kGridY + kArenaH - 34.f, 16, kDim);
+        return;
+    }
+
+    drawTextCentered("Награда получена. Что дальше?", kGridX + kArenaW / 2.f, kGridY + 150.f, 24, kGood);
+    const R cont{kGridX + 40, kGridY + 240, 300, 52};
+    const R end{kGridX + 380, kGridY + 240, 300, 52};
+    const bool hc = inR(m, cont), he = inR(m, end);
+    DrawRectangle(cont.x, cont.y, cont.w, cont.h, hc ? Color{46,52,66,255} : kPanel);
+    DrawRectangle(end.x, end.y, end.w, end.h, he ? Color{60,40,40,255} : kPanel);
+    DrawRectangleLines(cont.x, cont.y, cont.w, cont.h, hc ? kAccent : kGridLine);
+    DrawRectangleLines(end.x, end.y, end.w, end.h, he ? kBad : kGridLine);
+    drawTextCentered("Следующий этаж", cont.x + cont.w / 2.f, cont.y + 14.f, 24, kText);
+    drawTextCentered("Закончить забег", end.x + end.w / 2.f, end.y + 14.f, 24, kText);
+    drawTextCentered("После выбора предмет можно надеть через I", kGridX + kArenaW / 2.f, kGridY + kArenaH - 34.f, 16, kDim);
+}
+
 void Game::drawForge() {
     const Vector2 m = mouse();
     const Color bronze = roomColor(RoomType::Forge);
@@ -2353,6 +2465,7 @@ void Game::drawRunView() {
     else if (r.phase() == RunPhase::BossIntro) drawBossIntro();
     else if (r.phase() == RunPhase::Shop) drawShop();
     else if (r.phase() == RunPhase::ForgeChoice) drawForge();
+    else if (r.phase() == RunPhase::BossReward) drawBossReward();
 
     DrawRectangle(kPanelX - 10, 10, kPanelW + 20, kScreenH - 20, kPanel);
     float y = 20;
@@ -2393,6 +2506,7 @@ void Game::drawRunView() {
 
     const char* hint = r.phase() == RunPhase::Fighting ? "Пробел - пауза   Вверх/Вниз - скорость боя   Esc - меню"
                   : r.phase() == RunPhase::ForgeChoice ? "Клик по предмету - улучшить   Enter/Esc - уйти   I - инвентарь"
+                  : r.phase() == RunPhase::BossReward ? "Выбери награду, затем следующий этаж или конец забега   I - инвентарь"
                   : "WASD - идти   I - инвентарь   T - торговец   G - кузница   Esc - меню";
     drawText(hint, kPanelX, kScreenH - 40.f, 15, kDim);
 }
@@ -2410,10 +2524,17 @@ void Game::drawResult() {
             for (const auto& a : all)
                 if (a.id == id) reward.push_back({fmt("Достижение: %s (+%d)", a.name.c_str(), a.reward), kAccent});
         reward.push_back({fmt("Всего артефактов: %d", profile_.artifacts), art});
+    } else if (run_ && !lastReward_.newAchievements.empty()) {
+        const Color art{190, 150, 255, 255};
+        const auto& all = achievements();
+        for (int id : lastReward_.newAchievements)
+            for (const auto& a : all)
+                if (a.id == id) reward.push_back({fmt("Достижение: %s (+%d)", a.name.c_str(), a.reward), kAccent});
+        reward.push_back({fmt("Всего артефактов: %d", profile_.artifacts), art});
     }
 
     const int shown = static_cast<int>(std::min<size_t>(reward.size(), 9));
-    const int w = 620, h = 330 + (run_ && resultWin_ ? 22 + shown * 26 : 0);
+    const int w = 620, h = 330 + (!reward.empty() ? 22 + shown * 26 : 0);
     const int x = (kScreenW - w) / 2, y = std::max(10, (kScreenH - h) / 2);
     DrawRectangle(x, y, w, h, kPanel);
     DrawRectangleLines(x, y, w, h, resultWin_ ? kGood : kBad);
@@ -2436,7 +2557,8 @@ void Game::drawResult() {
             drawTextCentered(reward[i].first, kScreenW / 2.f, ty, 19, reward[i].second);
             ty += 26;
         }
-        if (!resultWin_) drawTextCentered("Артефакты дают только победы над боссами.", kScreenW / 2.f, ty, 16, kDim);
+        if (!resultWin_ && lastReward_.bossArtifacts == 0 && lastReward_.newAchievements.empty())
+            drawTextCentered("Артефакты дают победы над боссами и достижения.", kScreenW / 2.f, ty, 16, kDim);
     } else {
         for (const auto& l : wrap(resultText_, w - 40.f, 20)) {
             drawTextCentered(l, kScreenW / 2.f, ty, 20, kText);

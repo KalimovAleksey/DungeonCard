@@ -570,10 +570,10 @@ int main() {
 
     // ------------------------------------------- профиль: артефакты и достижения
     {
-        CHECK(achievements().size() == 18);
+        CHECK(achievements().size() == 21);
         std::set<int> ids;
         for (auto& a : achievements()) { ids.insert(a.id); CHECK(a.reward == kAchievementArtifacts && !a.name.empty() && !a.desc.empty()); }
-        CHECK(ids.size() == 18);
+        CHECK(ids.size() == 21);
 
         Profile p;
         RunSummary s;
@@ -589,6 +589,7 @@ int main() {
         CHECK(p.artifacts == 2 + 18 && p.artifactsEarned == 20 && p.unlockedCount() == 6);
         CHECK(p.isUnlocked(BossArchmage) && p.isUnlocked(100 + static_cast<int>(Role::Mage)) && p.isUnlocked(200));
         CHECK(!p.isUnlocked(201));
+        CHECK(!p.isUnlocked(100 + static_cast<int>(Role::Bard)));
 
         RunReward again = p.recordRun(s);                           // повторная победа: только за босса
         CHECK(again.total() == kBossArtifacts && again.newAchievements.empty() && p.artifacts == 22);
@@ -613,6 +614,25 @@ int main() {
         lossy.casualties = 1;
         RunReward lrw = q.recordRun(lossy);
         CHECK(!q.isUnlocked(200) && lrw.newAchievements.size() == 5);
+
+        // достижение Барда
+        Profile bprof;
+        RunSummary bs = s;
+        bs.squad = {Role::Warrior, Role::Mage, Role::Cleric, Role::Bard};
+        RunReward br = bprof.recordRun(bs);
+        CHECK(bprof.isUnlocked(100 + static_cast<int>(Role::Bard)));
+        CHECK(std::find(br.newAchievements.begin(), br.newAchievements.end(), 100 + static_cast<int>(Role::Bard)) != br.newAchievements.end());
+
+        // достижения этажей
+        Profile fp;
+        RunSummary f2 = s; f2.floor = 2; f2.bossId = BossDevourer;
+        RunReward fr2 = fp.recordRun(f2);
+        CHECK(fp.isUnlocked(202));
+        CHECK(std::find(fr2.newAchievements.begin(), fr2.newAchievements.end(), 202) != fr2.newAchievements.end());
+        RunSummary f3 = s; f3.floor = 3; f3.bossId = BossKnight;
+        RunReward fr3 = fp.recordRun(f3);
+        CHECK(fp.isUnlocked(203));
+        CHECK(std::find(fr3.newAchievements.begin(), fr3.newAchievements.end(), 203) != fr3.newAchievements.end());
 
         // артефакты постоянны: сохраняются и читаются из файла
         p.meta.level[UpGreed] = 2;

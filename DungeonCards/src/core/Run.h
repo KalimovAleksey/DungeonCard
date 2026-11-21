@@ -15,7 +15,7 @@ namespace dc {
 // Exploring: игрок ходит по комнатам (WASD) и управляет инвентарём.
 // Fighting: автобой. RestChoice: привал, ждём решения. BossIntro: показана карточка босса.
 // Shop: отряд у торговца (покупка за монеты).
-enum class RunPhase { Exploring, Fighting, RestChoice, BossIntro, Shop, ForgeChoice, Victory, Defeat };
+enum class RunPhase { Exploring, Fighting, RestChoice, BossIntro, Shop, ForgeChoice, BossReward, Victory, Defeat };
 
 // Что приносит в забег постоянный профиль: улучшения «Наследия» и доступные артефакты.
 // Улучшения героев (ЗДР/АТК/ЗАЩ) применяются к героям ДО создания Run (Meta::applyToHero).
@@ -46,6 +46,15 @@ public:
     void step();               // одно действие автобоя
     void beginBossFight();     // из BossIntro: начать бой с боссом
     void closeCombat();        // убрать показ закончившегося боя
+    // --- награда за босса ---
+    const std::vector<Item>& bossRewardOptions() const { return bossReward_; }
+    bool bossRewardClaimed() const { return bossRewardClaimed_; }
+    bool bossRewardRecorded() const { return bossRewardedRecorded_; }
+    void markBossRewardRecorded() { bossRewardedRecorded_ = true; }
+    bool claimBossRewardItem(int index);      // выбрать 1 из 3 предметов 4 тира
+    bool claimBossRewardArtifacts();          // выбрать +3 артефакта
+    void grantArtifacts(int n) { artifacts_ += std::max(0, n); }
+    void finishRunAfterBoss(bool victory);    // закончить забег после награды
     // --- привал ---
     void restHeal();
     void restBuff(const std::vector<int>& heroIndexes);
@@ -124,6 +133,9 @@ private:
     bool newLoot_ = false;
     std::vector<std::string> log_;
     std::vector<Item> loot_;
+    std::vector<Item> bossReward_;
+    bool bossRewardClaimed_ = false;
+    bool bossRewardedRecorded_ = false;
     int cleared_ = 0;
     std::map<Vec2i, std::vector<ShopOffer>> stocks_;  // лоты торговцев (по комнатам)
 };

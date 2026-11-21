@@ -260,6 +260,10 @@ static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems,
             case RunPhase::Fighting:
                 run.step();
                 break;
+            case RunPhase::BossReward:
+                run.claimBossRewardArtifacts();
+                run.finishRunAfterBoss(true);
+                break;
             case RunPhase::Shop:
                 shopping(run, smartItems, rng);
                 if (smartItems) distribute(run, true, rng);

@@ -130,6 +130,7 @@ private:
     void updateInventory();
     void updateShop();
     void updateForge();
+    void updateBossReward();
     void onRunStep();
     void spawnActions();
     void updateAnims(float dt);
@@ -146,6 +147,7 @@ private:
     void drawInventory();
     void drawShop();
     void drawForge();
+    void drawBossReward();
     void drawBossCard(int x, int y, int w, int h, int bossId) const;
     void drawBossIntro();
     void drawResult();
@@ -211,6 +213,7 @@ private:
     RunReward lastReward_;               // награда за последний забег (для экрана итога)
     bool runRecorded_ = false;
     std::string legacyMsg_;
+    float achScroll_ = 0.f;
     std::vector<Resolution> resolutions_;
     RenderTexture2D target_{};
     bool quit_ = false;

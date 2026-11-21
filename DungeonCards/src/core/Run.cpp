@@ -52,9 +52,11 @@ RunSummary Run::summary() const {
     RunSummary s;
     s.victory = phase_ == RunPhase::Victory;
     s.bossId = fightBoss_;
+    s.floor = floor_;
     s.squad = squad_;
     s.casualties = casualties();
     s.aliveAtEnd = party_.aliveCount();
+    s.bossRewarded = bossRewardedRecorded_;
     return s;
 }
 
@@ -196,13 +198,49 @@ void Run::onFightWon() {
     ++cleared_;
     // combat_ остаётся живым, чтобы интерфейс показал последний удар; закроется через closeCombat().
     if (fightBoss_ >= 0) {
-        say(fmt("%s повержен! Победа!", bossInfo(fightBoss_).name.c_str()));
-        phase_ = RunPhase::Victory;
+        say(fmt("%s повержен! Выбери награду.", bossInfo(fightBoss_).name.c_str()));
+        bossReward_.clear();
+        bossRewardClaimed_ = false;
+        for (int i = 0; i < 3; ++i) {
+            Item it;
+            for (int attempt = 0; attempt < 20; ++attempt) {
+                it = rollLoot(rng_, 4);
+                bool dup = false;
+                for (const auto& o : bossReward_)
+                    if (o.name == it.name && o.kind == it.kind && o.power == it.power && o.relic == it.relic) dup = true;
+                if (!dup) break;
+            }
+            bossReward_.push_back(it);
+        }
+        phase_ = RunPhase::BossReward;
         return;
     }
     say("Враги разбиты.");
     giveLoot(pendingTier_);
     phase_ = RunPhase::Exploring;
+}
+
+bool Run::claimBossRewardItem(int index) {
+    if (phase_ != RunPhase::BossReward || bossRewardClaimed_) return false;
+    if (index < 0 || index >= static_cast<int>(bossReward_.size())) return false;
+    party_.bag.push_back(bossReward_[index]);
+    bossRewardClaimed_ = true;
+    say(fmt("Награда за босса: %s.", bossReward_[index].name.c_str()));
+    return true;
+}
+
+bool Run::claimBossRewardArtifacts() {
+    if (phase_ != RunPhase::BossReward || bossRewardClaimed_) return false;
+    artifacts_ += 3;
+    bossRewardClaimed_ = true;
+    say("Награда за босса: +3 артефакта.");
+    return true;
+}
+
+void Run::finishRunAfterBoss(bool victory) {
+    if (phase_ != RunPhase::BossReward || !bossRewardClaimed_) return;
+    phase_ = victory ? RunPhase::Victory : RunPhase::Exploring;
+    if (victory) say("Забег завершён победой.");
 }
 
 // ------------------------------------------------------------- события
@@ -304,7 +342,7 @@ void Run::restBuff(const std::vector<int>& idx) {
 // ------------------------------------------------------------ инвентарь
 
 bool Run::canManage() const {
-    return (phase_ == RunPhase::Exploring && !combat_) || phase_ == RunPhase::BossIntro || phase_ == RunPhase::Shop || phase_ == RunPhase::ForgeChoice;
+    return (phase_ == RunPhase::Exploring && !combat_) || phase_ == RunPhase::BossIntro || phase_ == RunPhase::Shop || phase_ == RunPhase::ForgeChoice || phase_ == RunPhase::BossReward;
 }
 
 // ------------------------------------------------------------- торговец
