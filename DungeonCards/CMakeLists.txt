@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 if(MSVC)
-  add_compile_options(/utf-8 /W4)   # исходники в UTF-8 (кириллица в строках)
+  add_compile_options(/utf-8 /W4 /MP)   # исходники в UTF-8 (кириллица в строках), параллельная компиляция
 else()
   add_compile_options(-Wall -Wextra)
 endif()
@@ -29,8 +29,15 @@ target_include_directories(dc_core PUBLIC src)
 
 # --- графическая игра (raylib) ----------------------------------------------
 if(DC_BUILD_GAME)
-  find_package(raylib 5.0 QUIET)
+  find_package(raylib 5.0 QUIET CONFIG)
   if(NOT raylib_FOUND)
+    find_package(raylib 5.0 QUIET)
+  endif()
+
+  if(raylib_FOUND)
+    message(STATUS "DungeonCards: using installed raylib ${raylib_VERSION}")
+  else()
+    message(STATUS "DungeonCards: installed raylib not found, fetching raylib 5.5")
     include(FetchContent)
     set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(raylib
@@ -40,8 +47,16 @@ if(DC_BUILD_GAME)
     FetchContent_MakeAvailable(raylib)
   endif()
 
+  if(TARGET raylib)
+    set(DC_RAYLIB_TARGET raylib)
+  elseif(TARGET raylib::raylib)
+    set(DC_RAYLIB_TARGET raylib::raylib)
+  else()
+    message(FATAL_ERROR "raylib was not found and could not be fetched")
+  endif()
+
   add_executable(DungeonCards src/main.cpp src/game/Game.cpp)
-  target_link_libraries(DungeonCards PRIVATE dc_core raylib)
+  target_link_libraries(DungeonCards PRIVATE dc_core ${DC_RAYLIB_TARGET})
 
   # assets/ рядом с exe (там можно положить font.ttf с кириллицей)
   add_custom_command(TARGET DungeonCards POST_BUILD
