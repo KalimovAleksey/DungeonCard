@@ -120,6 +120,16 @@ int main() {
         CHECK(p.heroes[0].maxHp == max0 + 6);                   // броня даёт и ЗДР (ур. x3)
         CHECK(p.heroes[0].hp == p.heroes[0].maxHp);
 
+        // Снятие предмета возвращает и текущее, и максимальное ЗДР: бесплатного лечения нет.
+        p.heroes[0].hp -= 4;
+        const int hurtHp = p.heroes[0].hp;
+        CHECK(p.unequip(0, ItemKind::Armor));
+        CHECK(p.heroes[0].maxHp == max0);
+        CHECK(p.heroes[0].hp == hurtHp - 6);                    // -6 бонусных ЗДР ушло вместе с бронёй
+        CHECK(p.equipFromBag((int)p.bag.size() - 1, 0));
+        CHECK(p.heroes[0].maxHp == max0 + 6);
+        CHECK(p.heroes[0].hp == hurtHp);                        // надевание вернуло ровно столько же
+
         p.bag.push_back(gear(ItemKind::Potion, 1, 10));
         CHECK(!p.equipFromBag((int)p.bag.size() - 1, 0));       // зелье не надевается
         p.heroes[2].hp = 5;
@@ -323,6 +333,29 @@ int main() {
         CHECK(three.size() == 2);                                         // больше двух не бьёт
     }
 
+    // ------------------------------------------ масштабирование врагов по этажам
+    {
+        CHECK(enemyScaleForFloor(1).hpPct == 100);
+        CHECK(enemyScaleForFloor(2).hpPct == 130);
+        CHECK(enemyScaleForFloor(3).hpPct == 160);
+        CHECK(enemyScaleForFloor(3).atkPct == 160);
+        CHECK(enemyScaleForFloor(3).defBonus == 2);
+        CHECK(enemyScaleForFloor(3).coinPct == 140);
+
+        auto scaled = [](int floor) {
+            Rng rr(1);
+            Enemy e;
+            e.name = "Враг"; e.maxHp = e.hp = 100; e.atk = 10; e.def = 2; e.coins = 10; e.spd = 1;
+            Party party;
+            Combat cb(party, {e}, rr, -1, floor);
+            return cb.enemies().front();
+        };
+        const Enemy f1 = scaled(1), f3 = scaled(3);
+        CHECK(f1.maxHp == 100 && f1.atk == 10 && f1.def == 2 && f1.coins == 10);
+        CHECK(f3.maxHp == 160 && f3.atk == 16 && f3.def == 4 && f3.coins == 14);
+        CHECK(f3.hp == f3.maxHp);
+    }
+
     // -------------------------------------------------- друид: цепное лечение
     {
         for (int bonusDef = 0; bonusDef <= 6; bonusDef += 3) {
@@ -353,37 +386,58 @@ int main() {
         }
     }
 
-    // --------------------------------------- ловушки: два разных героя, вор -> 50-60%
+    // --------------------------------------- ловушки: премия за риск, шанс заметить, вор
     {
-        auto trapRun = [&](bool withRogue, int aliveCount, int seed) {
+        struct TrapResult {
+            std::vector<int> lost;
+            int coins = 0;
+            int lootTier = 0;
+        };
+        auto trapRun = [&](bool withRogue, int aliveCount, int seed, int diff = 2) -> TrapResult {
             Dungeon d;
-            d.place(card(RoomType::Trap, 2, doorBit(West)), {s.x + 1, s.y});
+            d.place(card(RoomType::Trap, diff, doorBit(West)), {s.x + 1, s.y});
             std::vector<Hero> squad = {tough("Воин", Role::Warrior, 8), tough("Маг", Role::Mage, 8),
                                        tough(withRogue ? "Вор" : "Жрица", withRogue ? Role::Rogue : Role::Cleric, 8),
                                        tough("Паладин", Role::Paladin, 8)};
             for (int i = aliveCount; i < 4; ++i) squad[i].hp = 0;
             Run r(d, seed, squad);
             r.move(East);
-            std::vector<int> lost;
-            for (auto& h : r.party().heroes) lost.push_back(h.alive() || h.hp < 0 ? 900 - h.hp : 0);
-            return lost;
+            TrapResult out;
+            for (auto& h : r.party().heroes) out.lost.push_back(h.alive() || h.hp < 0 ? 900 - h.hp : 0);
+            out.coins = r.party().coins;
+            out.lootTier = r.loot().empty() ? 0 : r.loot().front().tier;
+            return out;
         };
+
+        bool sawFull = false, sawNoticed = false;
         for (int seed = 0; seed < 60; ++seed) {
-            auto lost = trapRun(false, 4, seed);          // без вора: полный урон 10, ровно двое разных
-            int hurt = 0;
-            for (int l : lost) { if (l > 0) { ++hurt; CHECK(l == 10); } }
+            auto t = trapRun(false, 4, seed);            // без вора: 10 урона или 5, если заметили
+            int hurt = 0, dmg = 0;
+            for (int l : t.lost) {
+                if (l <= 0) continue;
+                ++hurt;
+                CHECK(l == 5 || l == 10);                // оба пострадавших получают одинаково
+                if (dmg == 0) dmg = l;
+                CHECK(l == dmg);
+            }
             CHECK(hurt == 2);
+            sawFull |= dmg == 10;
+            sawNoticed |= dmg == 5;
+            CHECK(t.coins == 20 && t.lootTier == 3);     // d=2: добыча ур.3 вместо ур.2 + 20 монет
 
-            auto lostR = trapRun(true, 4, seed);          // с вором: 5-6 вместо 10, всё равно двое разных
-            int hurtR = 0;
-            for (int l : lostR) { if (l > 0) { ++hurtR; CHECK(l >= 5 && l <= 6); } }
-            CHECK(hurtR == 2);
+            auto withRogue = trapRun(true, 4, seed);     // вор обезвреживает: урона нет
+            for (int l : withRogue.lost) CHECK(l == 0);
+            CHECK(withRogue.coins == 20 && withRogue.lootTier == 3);
 
-            auto lostOne = trapRun(false, 1, seed);       // жив один: бьют только его, один раз
+            auto one = trapRun(false, 1, seed);          // жив один: бьют только его, один раз
             int total = 0, hurtOne = 0;
-            for (int l : lostOne) if (l > 0 && l < 900) { total += l; ++hurtOne; }
-            CHECK(hurtOne <= 1 && total <= 10);
+            for (int l : one.lost) if (l > 0 && l < 900) { total += l; ++hurtOne; }
+            CHECK(hurtOne == 1 && (total == 5 || total == 10));
         }
+        CHECK(sawFull && sawNoticed);                    // оба исхода встречаются
+
+        auto hard = trapRun(false, 4, 3, 3);             // d=3: тир 4 не раздаём, но монет больше
+        CHECK(hard.lootTier == 3 && hard.coins == 30);
     }
 
     // -------------------------------------------------- воскрешение на привале
@@ -400,19 +454,84 @@ int main() {
         CHECK(r.phase() == RunPhase::RestChoice);
         CHECK(!r.restRevive(0));                       // нет монет
         r.grantCoins(120);
+        CHECK(r.reviveChancePct() == 50);              // жива Жрица
+        CHECK(r.reviveCoinCost() == 37);               // 75 * (100 - 50) / 100
+        CHECK(r.reviveArtifactCost() == 1);            // ceil(2 * 50 / 100)
+        CHECK(r.canRestReviveFree());
         CHECK(!r.restRevive(3));                       // живого воскрешать нельзя
         CHECK(!r.restRevive(9));
         CHECK(r.restRevive(0));
-        CHECK(r.party().coins == 120 - Run::kReviveCost);
+        CHECK(r.party().coins == 120 - 37);
         CHECK(r.party().heroes[0].alive() && r.party().heroes[0].hp == 40 * Run::kRevivePct / 100);
         CHECK(r.phase() == RunPhase::RestChoice);      // привал продолжается: можно выбрать лечение/бафф
         CHECK(r.restRevive(1));
-        CHECK(r.party().coins == 120 - 2 * Run::kReviveCost);
+        CHECK(r.party().coins == 120 - 2 * 37);
         CHECK(r.party().heroes[1].hp == 13);
         CHECK(!r.restRevive(0));                       // уже жив
         r.restHeal();
         CHECK(r.phase() == RunPhase::Exploring);
         CHECK(r.party().heroes[0].hp == 20 + 40 * Run::kRestHealPct / 100);   // воскрешённый лечится как все
+    }
+
+    // ------------------------------ бесплатная попытка и доплата до 100% (без жреца)
+    {
+        auto makeRest = [&](uint32_t seed, bool cleric) -> std::unique_ptr<Run> {
+            Dungeon d;
+            d.place(card(RoomType::Rest, 1, doorBit(West)), {s.x + 1, s.y});
+            std::vector<Hero> squad = {makeHero("Воин", Role::Warrior, 40, 8, 3, 4),
+                                       makeHero("Маг", Role::Mage, 26, 11, 1, 5)};
+            if (cleric) squad.push_back(makeHero("Жрица", Role::Cleric, 30, 5, 2, 3));
+            squad[0].hp = 0;
+            RunOptions opt;
+            opt.artifacts = 2;
+            std::unique_ptr<Run> r(new Run(d, seed, squad, opt));
+            r->move(East);
+            return r;
+        };
+
+        auto noCleric = makeRest(7, false);
+        CHECK(noCleric->phase() == RunPhase::RestChoice);
+        CHECK(noCleric->reviveChancePct() == 25);
+        CHECK(noCleric->reviveCoinCost() == 56);         // 75 * (100 - 25) / 100
+        CHECK(noCleric->reviveArtifactCost() == 2);      // ceil(2 * 75 / 100)
+
+        bool sawSuccess = false, sawFailure = false;
+        for (uint32_t seed = 0; seed < 200 && !(sawSuccess && sawFailure); ++seed) {
+            auto r = makeRest(seed, false);
+            CHECK(r->canRestReviveFree());
+            const bool ok = r->restReviveFree(0);
+            CHECK(r->freeReviveUsed());
+            CHECK(!r->canRestReviveFree());
+            CHECK(!r->restReviveFree(0));                // вторая попытка в тот же привал недоступна
+            CHECK(r->phase() == RunPhase::RestChoice);   // привал продолжается и после провала
+            if (ok) {
+                sawSuccess = true;
+                CHECK(r->party().heroes[0].alive());
+                CHECK(r->party().heroes[0].hp == 40 * Run::kFreeRevivePct / 100);
+                CHECK(r->artifacts() == 2 && r->party().coins == 0);  // бесплатно
+            } else {
+                sawFailure = true;
+                CHECK(!r->party().heroes[0].alive());
+                r->grantCoins(80);
+                CHECK(r->restRevive(0));                 // можно доплатить за гарантию
+                CHECK(r->party().coins == 80 - 56);
+                CHECK(r->party().heroes[0].hp == 40 * Run::kRevivePct / 100);
+            }
+        }
+        CHECK(sawSuccess && sawFailure);
+
+        auto withCleric = makeRest(7, true);
+        CHECK(withCleric->reviveChancePct() == 50);
+        CHECK(withCleric->reviveCoinCost() == 37);
+        CHECK(withCleric->reviveArtifactCost() == 1);
+        CHECK(withCleric->restReviveArtifact(0));
+        CHECK(withCleric->artifacts() == 1);
+        CHECK(!withCleric->restReviveArtifact(0));       // артефакты кончились
+
+        auto art = makeRest(9, false);
+        CHECK(art->restReviveArtifact(0));               // без жреца: 2 артефакта за гарантию
+        CHECK(art->artifacts() == 0);
+        CHECK(art->party().heroes[0].hp == 40 * Run::kReviveArtifactPct / 100);
     }
 
     // --------------------------------------------------- вампиризм и крит от реликвий
@@ -488,7 +607,7 @@ int main() {
         CHECK(r.phase() == RunPhase::Shop);
         CHECK((*r.shopStock())[0].sold);
     }
-    {   // монеты падают с врагов (и только с врагов)
+    {   // монеты падают с врагов и с ловушки
         Dungeon d;
         d.place(card(RoomType::Combat, 2, doorBit(West) | doorBit(East)), {s.x + 1, s.y});
         d.place(card(RoomType::Trap, 1, doorBit(West)), {s.x + 2, s.y});
@@ -502,8 +621,9 @@ int main() {
         CHECK(r.party().coins >= 3 * 7 && r.party().coins <= 3 * 11);   // три врага сложности 2
         const int coins = r.party().coins;
         r.closeCombat();
-        CHECK(r.move(East));                                            // ловушка монет не даёт
-        CHECK(r.party().coins == coins);
+        CHECK(r.move(East));                                            // ловушка сложности 1: +10 монет и добыча ур.2
+        CHECK(r.party().coins == coins + 10);
+        CHECK(r.loot().size() == 2);
     }
     {   // монеты за убитых: подсчёт в событиях боя
         Rng rr(7);
@@ -548,10 +668,10 @@ int main() {
             CHECK(upgradeEffect(u, 0) == "нет" && !upgradeEffect(u, 1).empty());
         }
         Meta m;
-        CHECK(m.reviveCoinCost() == 50 && m.restHealPct() == 40 && m.startCoins() == 0);
+        CHECK(m.reviveCoinCost() == 75 && m.restHealPct() == 40 && m.startCoins() == 0);
         CHECK(m.nextCost(UpVitality) == 8 && !m.maxed(UpVitality));
         m.level[UpLife] = 3;
-        CHECK(m.reviveCoinCost() == 26);
+        CHECK(m.reviveCoinCost() == 51);
         m.level[UpVitality] = 2;
         CHECK(m.maxed(UpVitality) && m.nextCost(UpVitality) == 0);
 
@@ -570,10 +690,10 @@ int main() {
 
     // ------------------------------------------- профиль: артефакты и достижения
     {
-        CHECK(achievements().size() == 18);
+        CHECK(achievements().size() == 21);
         std::set<int> ids;
         for (auto& a : achievements()) { ids.insert(a.id); CHECK(a.reward == kAchievementArtifacts && !a.name.empty() && !a.desc.empty()); }
-        CHECK(ids.size() == 18);
+        CHECK(ids.size() == 21);
 
         Profile p;
         RunSummary s;
@@ -589,6 +709,7 @@ int main() {
         CHECK(p.artifacts == 2 + 18 && p.artifactsEarned == 20 && p.unlockedCount() == 6);
         CHECK(p.isUnlocked(BossArchmage) && p.isUnlocked(100 + static_cast<int>(Role::Mage)) && p.isUnlocked(200));
         CHECK(!p.isUnlocked(201));
+        CHECK(!p.isUnlocked(100 + static_cast<int>(Role::Bard)));
 
         RunReward again = p.recordRun(s);                           // повторная победа: только за босса
         CHECK(again.total() == kBossArtifacts && again.newAchievements.empty() && p.artifacts == 22);
@@ -613,6 +734,25 @@ int main() {
         lossy.casualties = 1;
         RunReward lrw = q.recordRun(lossy);
         CHECK(!q.isUnlocked(200) && lrw.newAchievements.size() == 5);
+
+        // достижение Барда
+        Profile bprof;
+        RunSummary bs = s;
+        bs.squad = {Role::Warrior, Role::Mage, Role::Cleric, Role::Bard};
+        RunReward br = bprof.recordRun(bs);
+        CHECK(bprof.isUnlocked(100 + static_cast<int>(Role::Bard)));
+        CHECK(std::find(br.newAchievements.begin(), br.newAchievements.end(), 100 + static_cast<int>(Role::Bard)) != br.newAchievements.end());
+
+        // достижения этажей
+        Profile fp;
+        RunSummary f2 = s; f2.floor = 2; f2.bossId = BossDevourer;
+        RunReward fr2 = fp.recordRun(f2);
+        CHECK(fp.isUnlocked(202));
+        CHECK(std::find(fr2.newAchievements.begin(), fr2.newAchievements.end(), 202) != fr2.newAchievements.end());
+        RunSummary f3 = s; f3.floor = 3; f3.bossId = BossKnight;
+        RunReward fr3 = fp.recordRun(f3);
+        CHECK(fp.isUnlocked(203));
+        CHECK(std::find(fr3.newAchievements.begin(), fr3.newAchievements.end(), 203) != fr3.newAchievements.end());
 
         // артефакты постоянны: сохраняются и читаются из файла
         p.meta.level[UpGreed] = 2;
@@ -655,6 +795,8 @@ int main() {
         Run r(d, 1, squad, opt);
         CHECK(r.artifacts() == 2 && !r.restReviveArtifact(0));      // вне привала нельзя
         CHECK(r.move(East));
+        CHECK(r.fullReviveCoinCost() == 75);
+        CHECK(r.reviveArtifactCost() == 1);                         // со жрецом: 50% шанса даёт 1 артефакт
         CHECK(r.restReviveArtifact(0));
         CHECK(r.artifacts() == 1);
         CHECK(r.party().heroes[0].hp == 40 * Run::kReviveArtifactPct / 100);   // 75% здоровья
@@ -683,7 +825,8 @@ int main() {
         CHECK(r.party().coins == 30);                               // «Походный кошелёк»
         CHECK(r.party().bag.size() == 2 && r.party().potionCount() == 2);   // «Дар предков»: 2 зелья т1
         for (auto& it : r.party().bag) CHECK(it.tier == 1);
-        CHECK(r.reviveCoinCost() == 26);
+        CHECK(r.fullReviveCoinCost() == 51);                         // «Школа жизни»: 75 - 3*8
+        CHECK(r.reviveCoinCost() == 51 * (100 - r.reviveChancePct()) / 100);
         CHECK(r.move(East));
         for (auto& o : *r.shopStock()) CHECK(o.price == std::max(1, itemPrice(o.item) * 80 / 100));   // -20% цен
     }

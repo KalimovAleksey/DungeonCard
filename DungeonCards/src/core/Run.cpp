@@ -52,9 +52,11 @@ RunSummary Run::summary() const {
     RunSummary s;
     s.victory = phase_ == RunPhase::Victory;
     s.bossId = fightBoss_;
+    s.floor = floor_;
     s.squad = squad_;
     s.casualties = casualties();
     s.aliveAtEnd = party_.aliveCount();
+    s.bossRewarded = bossRewardedRecorded_;
     return s;
 }
 
@@ -87,6 +89,16 @@ void Run::enterRoom(Vec2i p) {
         phase_ = RunPhase::Shop;
         return;
     }
+    if (r->card.type == RoomType::Forge) {  // в кузницу можно возвращаться
+        if (!r->visited) {
+            r->visited = true;
+            say("Кузница! Выбери предмет в рюкзаке для улучшения.");
+        } else {
+            say("Снова у кузницы.");
+        }
+        phase_ = RunPhase::ForgeChoice;
+        return;
+    }
     if (r->visited) return;
     r->visited = true;
     const int d = r->card.difficulty;
@@ -110,6 +122,7 @@ void Run::enterRoom(Vec2i p) {
             break;
         case RoomType::Rest:
             phase_ = RunPhase::RestChoice;
+            freeReviveUsed_ = false;
             say("Привал! Лечение группы или усиление двух героев?");
             break;
         case RoomType::Boss:
@@ -117,13 +130,20 @@ void Run::enterRoom(Vec2i p) {
             phase_ = RunPhase::BossIntro;
             say(fmt("Логово босса: %s. Подготовь отряд!", bossInfo(pendingBoss_).name.c_str()));
             break;
-        case RoomType::Forge:
-            phase_ = RunPhase::ForgeChoice;
-            say("Кузница! Выбери предмет в рюкзаке для улучшения.");
-            break;
+        
         default:
             break;
     }
+}
+bool Run::inForgeRoom() const {
+    const Room* r = dungeon_.roomAt(pos_);
+    return r && r->card.type == RoomType::Forge;
+}
+
+bool Run::openForge() {
+    if (phase_ != RunPhase::Exploring || combat_ || !inForgeRoom()) return false;
+    phase_ = RunPhase::ForgeChoice;
+    return true;
 }
 
 // ------------------------------------------------------------------ бой
@@ -132,11 +152,7 @@ void Run::startFight(std::vector<Enemy> enemies, int lootTier, int bossId) {
     pendingTier_ = lootTier;
     fightBoss_ = bossId;
     ++fightId_;
-    if (floor_ > 1) {
-        const int pct = 100 + (floor_ - 1) * 15;
-        for (auto& e : enemies) { e.hp = e.maxHp = std::max(1, e.maxHp * pct / 100); e.atk = std::max(1, e.atk * pct / 100); }
-    }
-    combat_ = std::make_unique<Combat>(party_, std::move(enemies), rng_, bossId);
+    combat_ = std::make_unique<Combat>(party_, std::move(enemies), rng_, bossId, floor_);
     combat_->setDamageReduction(meta_.damageReducePct());
     phase_ = RunPhase::Fighting;
 }
@@ -179,13 +195,49 @@ void Run::onFightWon() {
     ++cleared_;
     // combat_ остаётся живым, чтобы интерфейс показал последний удар; закроется через closeCombat().
     if (fightBoss_ >= 0) {
-        say(fmt("%s повержен! Победа!", bossInfo(fightBoss_).name.c_str()));
-        phase_ = RunPhase::Victory;
+        say(fmt("%s повержен! Выбери награду.", bossInfo(fightBoss_).name.c_str()));
+        bossReward_.clear();
+        bossRewardClaimed_ = false;
+        for (int i = 0; i < 3; ++i) {
+            Item it;
+            for (int attempt = 0; attempt < 20; ++attempt) {
+                it = rollLoot(rng_, 4);
+                bool dup = false;
+                for (const auto& o : bossReward_)
+                    if (o.name == it.name && o.kind == it.kind && o.power == it.power && o.relic == it.relic) dup = true;
+                if (!dup) break;
+            }
+            bossReward_.push_back(it);
+        }
+        phase_ = RunPhase::BossReward;
         return;
     }
     say("Враги разбиты.");
     giveLoot(pendingTier_);
     phase_ = RunPhase::Exploring;
+}
+
+bool Run::claimBossRewardItem(int index) {
+    if (phase_ != RunPhase::BossReward || bossRewardClaimed_) return false;
+    if (index < 0 || index >= static_cast<int>(bossReward_.size())) return false;
+    party_.bag.push_back(bossReward_[index]);
+    bossRewardClaimed_ = true;
+    say(fmt("Награда за босса: %s.", bossReward_[index].name.c_str()));
+    return true;
+}
+
+bool Run::claimBossRewardArtifacts() {
+    if (phase_ != RunPhase::BossReward || bossRewardClaimed_) return false;
+    artifacts_ += 3;
+    bossRewardClaimed_ = true;
+    say("Награда за босса: +3 артефакта.");
+    return true;
+}
+
+void Run::finishRunAfterBoss(bool victory) {
+    if (phase_ != RunPhase::BossReward || !bossRewardClaimed_) return;
+    phase_ = victory ? RunPhase::Victory : RunPhase::Exploring;
+    if (victory) say("Забег завершён победой.");
 }
 
 // ------------------------------------------------------------- события
@@ -199,24 +251,33 @@ void Run::giveLoot(int tier) {
 }
 
 void Run::resolveTrap(int d) {
-    // Урон получают два РАЗНЫХ героя (один герой дважды - никогда). Живой Вор всегда
-    // замечает ловушку и снижает её урон до 50-60%.
-    int pct = 100;
-    if (party_.findAlive(Role::Rogue)) {
-        pct = rng_.range(50, 60);
-        say(fmt("Вор замечает ловушку: урон снижен до %d%%.", pct));
+    // Ловушка - это риск с наградой: добыча на тир выше (тир 4 остаётся за боссом)
+    // плюс монеты. Любой отряд может заметить её и снизить урон; живой Вор замечает
+    // всегда и обезвреживает полностью.
+    const bool rogue = party_.findAlive(Role::Rogue) != nullptr;
+    const bool noticed = rogue || rng_.range(1, 100) <= kTrapNoticePct;
+    int pct = noticed ? 50 : 100;
+    if (rogue) {
+        pct = 0;
+        say("Вор обезвредил ловушку: урона нет.");
+    } else if (noticed) {
+        say(fmt("Ловушка замечена: урон снижен до %d%%.", pct));
     } else {
         say("Ловушка сработала!");
     }
-    std::vector<int> alive;
-    for (int i = 0; i < static_cast<int>(party_.heroes.size()); ++i)
-        if (party_.heroes[i].alive()) alive.push_back(i);
-    rng_.shuffle(alive);
-    const int dmg = std::max(1, d * 5 * pct / 100);
-    for (size_t k = 0; k < alive.size() && k < 2; ++k) {
-        Hero& h = party_.heroes[alive[k]];
-        h.hp -= dmg;
-        say(fmt("%s: -%d%s", h.name.c_str(), dmg, h.alive() ? "" : " - пал"));
+
+    // Урон получают два РАЗНЫХ героя (один герой дважды - никогда).
+    if (pct > 0) {
+        std::vector<int> alive;
+        for (int i = 0; i < static_cast<int>(party_.heroes.size()); ++i)
+            if (party_.heroes[i].alive()) alive.push_back(i);
+        rng_.shuffle(alive);
+        const int dmg = std::max(1, d * 5 * pct / 100);
+        for (size_t k = 0; k < alive.size() && k < 2; ++k) {
+            Hero& h = party_.heroes[alive[k]];
+            h.hp -= dmg;
+            say(fmt("%s: -%d%s", h.name.c_str(), dmg, h.alive() ? "" : " - пал"));
+        }
     }
     updateLosses();
     if (!party_.anyAlive()) {
@@ -224,8 +285,12 @@ void Run::resolveTrap(int d) {
         say("Отряд погиб в ловушке.");
         return;
     }
+    const int tier = std::min(3, d + 1);         // тир 4 по-прежнему только с босса
+    const int coins = d * kTrapCoinPerDifficulty;
+    grantCoins(coins);
     ++cleared_;
-    giveLoot(d);
+    giveLoot(tier);
+    say(fmt("Ловушка: добыча ур.%d, +%d монет.", tier, coins));
 }
 
 void Run::restHeal() {
@@ -236,7 +301,8 @@ void Run::restHeal() {
     phase_ = RunPhase::Exploring;
 }
 
-// Воскрешение на привале: платная услуга, привал при этом не заканчивается.
+// Гарантированное воскрешение: платим только за недостающий до 100% шанс.
+// Привал при этом не заканчивается - можно выбрать лечение или усиление.
 bool Run::restRevive(int heroIndex) {
     if (phase_ != RunPhase::RestChoice) return false;
     if (heroIndex < 0 || heroIndex >= static_cast<int>(party_.heroes.size())) return false;
@@ -251,17 +317,18 @@ bool Run::restRevive(int heroIndex) {
     return true;
 }
 
-// Воскрешение за артефакт: дороже по редкости валюты, зато здоровья больше.
+// Доплата артефактами до 100%: дороже по редкости валюты, зато здоровья больше.
 bool Run::restReviveArtifact(int heroIndex) {
     if (phase_ != RunPhase::RestChoice) return false;
     if (heroIndex < 0 || heroIndex >= static_cast<int>(party_.heroes.size())) return false;
     Hero& h = party_.heroes[heroIndex];
-    if (h.alive() || artifacts_ < kReviveArtifactCost) return false;
-    artifacts_ -= kReviveArtifactCost;
+    const int cost = reviveArtifactCost();
+    if (h.alive() || artifacts_ < cost) return false;
+    artifacts_ -= cost;
     if (heroIndex < static_cast<int>(died_.size())) died_[heroIndex] = true;
     h.hp = std::max(1, h.maxHp * kReviveArtifactPct / 100);
     h.away = false;
-    say(fmt("Привал: %s воскрешён за артефакт (%d%% здоровья).", h.name.c_str(), kReviveArtifactPct));
+    say(fmt("Привал: %s воскрешён за %d артефакта (%d%% здоровья).", h.name.c_str(), cost, kReviveArtifactPct));
     return true;
 }
 
@@ -287,7 +354,7 @@ void Run::restBuff(const std::vector<int>& idx) {
 // ------------------------------------------------------------ инвентарь
 
 bool Run::canManage() const {
-    return (phase_ == RunPhase::Exploring && !combat_) || phase_ == RunPhase::BossIntro || phase_ == RunPhase::Shop || phase_ == RunPhase::ForgeChoice;
+    return (phase_ == RunPhase::Exploring && !combat_) || phase_ == RunPhase::BossIntro || phase_ == RunPhase::Shop || phase_ == RunPhase::ForgeChoice || phase_ == RunPhase::BossReward;
 }
 
 // ------------------------------------------------------------- торговец
@@ -304,13 +371,16 @@ bool Run::openShop() {
     phase_ = RunPhase::Shop;
     return true;
 }
+int Run::effectivePrice(const ShopOffer& offer) const {
+    return hasLivingBard() ? offer.price * 85 / 100 : offer.price;
+}
 
 bool Run::buy(int idx) {
     if (phase_ != RunPhase::Shop) return false;
     auto it = stocks_.find(pos_);
     if (it == stocks_.end() || idx < 0 || idx >= static_cast<int>(it->second.size())) return false;
     ShopOffer& o = it->second[idx];
-    const int price = hasLivingBard() ? o.price * 85 / 100 : o.price;
+    const int price = effectivePrice(o);
     if (o.sold || party_.coins < price) return false;
     party_.coins -= price;
     o.sold = true;
@@ -332,16 +402,48 @@ int Run::restHealPct() const {
 }
 bool Run::hasLivingArcher() const { return party_.findAlive(Role::Archer) != nullptr; }
 bool Run::hasLivingBard() const { return party_.findAlive(Role::Bard) != nullptr; }
-bool Run::canRestRevive() const { for (const auto& h : party_.heroes) if (!h.alive()) return true; return false; }
+bool Run::canRestRevive() const {
+    for (const auto& h : party_.heroes)
+        if (!h.alive()) return true;
+    return false;
+}
+
 int Run::reviveChancePct() const { return party_.findAlive(Role::Cleric) ? 50 : 25; }
-void Run::restReviveRandom() {
-    if (phase_ != RunPhase::RestChoice) return;
-    std::vector<int> dead; for (int i=0;i<(int)party_.heroes.size();++i) if (!party_.heroes[i].alive()) dead.push_back(i);
-    if (dead.empty()) return;
-    int i = dead[rng_.range(0, (int)dead.size()-1)]; Hero& h=party_.heroes[i];
-    if (rng_.range(1,100) <= reviveChancePct()) { h.hp=std::max(1,h.maxHp*30/100); h.away=false; say(fmt("Привал: %s возвращается в строй (30%% ЗДР).",h.name.c_str())); }
-    else say(fmt("Привал: попытка воскресить %s не удалась.",h.name.c_str()));
-    ++cleared_; phase_=RunPhase::Exploring;
+
+bool Run::canRestReviveFree() const {
+    return phase_ == RunPhase::RestChoice && !freeReviveUsed_ && canRestRevive();
+}
+
+// Бесплатная попытка воскресить выбранного героя. Шанс известен заранее,
+// но попытка одна за привал: после неё привал продолжается и можно доплатить.
+bool Run::restReviveFree(int heroIndex) {
+    if (!canRestReviveFree()) return false;
+    if (heroIndex < 0 || heroIndex >= static_cast<int>(party_.heroes.size())) return false;
+    Hero& h = party_.heroes[heroIndex];
+    if (h.alive()) return false;
+
+    freeReviveUsed_ = true;
+    const int chance = reviveChancePct();
+    if (rng_.range(1, 100) <= chance) {
+        if (heroIndex < static_cast<int>(died_.size())) died_[heroIndex] = true;
+        h.hp = std::max(1, h.maxHp * kFreeRevivePct / 100);
+        h.away = false;
+        say(fmt("Привал: %s возвращается в строй (%d%% здоровья, шанс %d%%).",
+                h.name.c_str(), kFreeRevivePct, chance));
+        return true;
+    }
+    say(fmt("Привал: попытка воскресить %s не удалась (шанс %d%%).", h.name.c_str(), chance));
+    return false;
+}
+
+// Доплата = полная цена * недостающий шанс / 100. Артефакты округляем вверх:
+// 2 артефакта за 100% -> 2 за 75% (без жреца) и 1 за 50% (со жрецом).
+int Run::reviveCoinCost() const {
+    return fullReviveCoinCost() * (100 - reviveChancePct()) / 100;
+}
+int Run::reviveArtifactCost() const {
+    const int missing = 100 - reviveChancePct();
+    return (kReviveArtifactCost * missing + 99) / 100;
 }
 int Run::forgePrice(const Item& it) const { if (it.tier>=4 || it.kind==ItemKind::Potion) return 0; Item n=it; ++n.tier; return itemPrice(n)*60/100; }
 bool Run::forgeUpgrade(int i) {

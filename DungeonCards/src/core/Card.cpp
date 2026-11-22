@@ -22,7 +22,7 @@ const char* roomTypeHint(RoomType t) {
         case RoomType::Start:    return "Отсюда начинается поход";
         case RoomType::Combat:   return "Враги; добыча зависит от сложности";
         case RoomType::Treasure: return "Охрана (со 2 ур.) и добыча";
-        case RoomType::Trap:     return "Урон двум разным героям; Вор снижает его";
+        case RoomType::Trap:     return "Добыча на тир выше + монеты; Вор обезвреживает";
         case RoomType::Rest:     return "Привал: лечение всех или бафф двух героев";
         case RoomType::Boss:     return "Финал: победа в забеге";
         case RoomType::Shop:     return "Лавка у края карты: подключи её";

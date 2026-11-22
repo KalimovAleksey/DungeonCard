@@ -12,15 +12,46 @@ const std::vector<Achievement>& achievements() {
         for (int b = 0; b < kBossCount; ++b)
             v.push_back({b, "Боссы", "Победа: " + bossInfo(b).name, "Победить босса: " + bossInfo(b).name + ".", kAchievementArtifacts});
         const auto roster = heroRoster();
-        for (size_t i = 0; i < roster.size() && i < 8; ++i) { const auto& h = roster[i];
+        for (size_t i = 0; i < roster.size(); ++i) { const auto& h = roster[i];
             v.push_back({100 + static_cast<int>(h.role), "Герои", "Путь героя: " + h.name,
                          "Победить босса с героем " + h.name + " в отряде.", kAchievementArtifacts}); }
         v.push_back({200, "Особые", "Без потерь", "Победить босса, не потеряв ни одного героя (воскрешённый тоже считается потерей).",
                      kAchievementArtifacts});
         v.push_back({201, "Особые", "Последний герой", "Победить босса, когда в живых остался лишь один герой.", kAchievementArtifacts});
+        v.push_back({202, "Этажи", "Второй этаж", "Победить босса на втором этаже.", kAchievementArtifacts});
+        v.push_back({203, "Этажи", "Третий этаж", "Победить босса на третьем этаже.", kAchievementArtifacts});
         return v;
     }();
     return list;
+}
+
+RunReward Profile::recordFloorClear(const RunSummary& s) {
+    RunReward r;
+    if (s.bossId >= 0 && s.bossId < kBossCount) ++bossWins[s.bossId];
+    if (s.floor >= 0 && s.floor < static_cast<int>(floorWins.size())) ++floorWins[s.floor];
+    for (Role role : s.squad) {
+        const int i = static_cast<int>(role);
+        if (i >= 0 && i < static_cast<int>(heroWins.size())) ++heroWins[i];
+    }
+    r.bossArtifacts = kBossArtifacts;
+    for (const auto& a : achievements()) {
+        if (isUnlocked(a.id)) continue;
+        bool ok = false;
+        if (a.id < kBossCount) ok = bossWins[a.id] > 0;
+        else if (a.id == 202) ok = floorWins[2] > 0;
+        else if (a.id == 203) ok = floorWins[3] > 0;
+        else if (a.id >= 100) {
+            const int idx = a.id - 100;
+            if (idx >= 0 && idx < static_cast<int>(heroWins.size())) ok = heroWins[idx] > 0;
+        }
+        if (!ok) continue;
+        unlocked.insert(a.id);
+        r.newAchievements.push_back(a.id);
+        r.achievementArtifacts += a.reward;
+    }
+    artifacts += r.total();
+    artifactsEarned += r.total();
+    return r;
 }
 
 RunReward Profile::recordRun(const RunSummary& s) {
@@ -28,22 +59,30 @@ RunReward Profile::recordRun(const RunSummary& s) {
     ++runs;
     if (!s.victory) return r;
     ++wins;
-    if (s.bossId >= 0 && s.bossId < kBossCount) ++bossWins[s.bossId];
-    for (Role role : s.squad) {
-        const int i = static_cast<int>(role);
-        if (i >= 0 && i < 8) ++heroWins[i];
+    if (!s.bossRewarded) {
+        if (s.bossId >= 0 && s.bossId < kBossCount) ++bossWins[s.bossId];
+        if (s.floor >= 0 && s.floor < static_cast<int>(floorWins.size())) ++floorWins[s.floor];
+        for (Role role : s.squad) {
+            const int i = static_cast<int>(role);
+            if (i >= 0 && i < static_cast<int>(heroWins.size())) ++heroWins[i];
+        }
+        r.bossArtifacts = kBossArtifacts;
     }
     if (s.casualties == 0) ++flawlessWins;
     if (s.aliveAtEnd == 1) ++lastStandWins;
 
-    r.bossArtifacts = kBossArtifacts;
     for (const auto& a : achievements()) {
         if (isUnlocked(a.id)) continue;
         bool ok = false;
         if (a.id < kBossCount) ok = bossWins[a.id] > 0;
-        else if (a.id >= 100 && a.id < 108) ok = heroWins[a.id - 100] > 0;
         else if (a.id == 200) ok = flawlessWins > 0;
         else if (a.id == 201) ok = lastStandWins > 0;
+        else if (a.id == 202) ok = floorWins[2] > 0;
+        else if (a.id == 203) ok = floorWins[3] > 0;
+        else if (a.id >= 100) {
+            const int idx = a.id - 100;
+            if (idx >= 0 && idx < static_cast<int>(heroWins.size())) ok = heroWins[idx] > 0;
+        }
         if (!ok) continue;
         unlocked.insert(a.id);
         r.newAchievements.push_back(a.id);
@@ -78,6 +117,8 @@ std::string Profile::serialize() const {
     for (int v : bossWins) o << " " << v;
     o << "\nherowins";
     for (int v : heroWins) o << " " << v;
+    o << "\nfloorwins";
+    for (int v : floorWins) o << " " << v;
     o << "\nunlocked";
     for (int id : unlocked) o << " " << id;
     o << "\nmeta";
@@ -103,6 +144,7 @@ Profile Profile::parse(const std::string& text) {
         else if (key == "laststand") { ls >> p.lastStandWins; p.lastStandWins = nonNeg(p.lastStandWins); }
         else if (key == "bosswins") { for (int& v : p.bossWins) { if (!(ls >> v)) break; v = nonNeg(v); } }
         else if (key == "herowins") { for (int& v : p.heroWins) { if (!(ls >> v)) break; v = nonNeg(v); } }
+        else if (key == "floorwins") { for (int& v : p.floorWins) { if (!(ls >> v)) break; v = nonNeg(v); } }
         else if (key == "unlocked") {
             int id;
             while (ls >> id)

@@ -66,8 +66,26 @@ Enemy makeBoss(int id) {
 
 // ---------------------------------------------------------------- боевка
 
-Combat::Combat(Party& party, std::vector<Enemy> enemies, Rng& rng, int bossId)
-    : party_(party), enemies_(std::move(enemies)), rng_(rng), bossId_(bossId) {
+EnemyScale enemyScaleForFloor(int floor) {
+    const int step = std::max(0, std::max(1, floor) - 1);
+    return {100 + 30 * step, 100 + 30 * step, step, 100 + 20 * step};
+}
+
+void scaleEnemy(Enemy& e, const EnemyScale& scale) {
+    const int newMax = std::max(1, e.maxHp * scale.hpPct / 100);
+    const int delta = newMax - e.maxHp;
+    e.maxHp = newMax;
+    // Текущее HP сдвигается на ту же дельту: свежие враги остаются полными,
+    // а уже раненые (например, в тестах) не «залечиваются» масштабированием.
+    if (delta != 0) e.hp = std::max(1, e.hp + delta);
+    e.atk = std::max(1, e.atk * scale.atkPct / 100);
+    e.def += scale.defBonus;
+    if (e.coins > 0) e.coins = std::max(1, e.coins * scale.coinPct / 100);
+}
+
+Combat::Combat(Party& party, std::vector<Enemy> enemies, Rng& rng, int bossId, int floor)
+    : party_(party), enemies_(std::move(enemies)), rng_(rng), bossId_(bossId), scale_(enemyScaleForFloor(floor)) {
+    for (auto& e : enemies_) scaleEnemy(e, scale_);
     enemies_.reserve(16);  // ссылки на врагов не должны «ломаться» при призыве/делении
     slotCount_ = std::max<int>(1, static_cast<int>(enemies_.size()));
     if (bossId == BossSlime || bossId == BossNecro) slotCount_ = 4;
@@ -217,7 +235,7 @@ void Combat::startRound(std::vector<std::string>& log) {
     for (int i = 0; i < static_cast<int>(enemies_.size()); ++i) {
         Enemy& e = enemies_[i];
         if (!e.alive() || e.bossId != BossTroll) continue;
-        int gained = std::min(e.maxHp - e.hp, 7);
+        int gained = std::min(e.maxHp - e.hp, std::max(1, 7 * scale_.hpPct / 100));
         if (gained > 0) {
             e.hp += gained;
             CombatAction a;
@@ -480,6 +498,7 @@ void Combat::onEnemyDeath(int ei, std::vector<std::string>& log) {
             c.size = g == 1 ? 90 : 64;
             c.slot = slot;
             c.art = g == 1 ? "bosses/slime_medium.png" : "bosses/slime_small.png";
+            scaleEnemy(c, scale_);
             return c;
         };
         enemies_.push_back(make(parent.slot));
@@ -533,6 +552,7 @@ void Combat::summonSkeletons(int ei, std::vector<std::string>& log) {
         s.size = 64;
         s.slot = slot;
         s.art = enemyArt("skeleton_minion");
+        scaleEnemy(s, scale_);
         if (revive >= 0) enemies_[revive] = s;
         else enemies_.push_back(s);
         ++made;
@@ -560,11 +580,11 @@ void Combat::enemyAct(int i, std::vector<std::string>& log) {
                 for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j)
                     if (party_.heroes[j].inFight() && (best < 0 || party_.heroes[j].atk > party_.heroes[best].atk)) best = j;
                 swallowed_ = best;
-                swallowLeft_ = 55;
+                swallowLeft_ = 55 * scale_.hpPct / 100;
                 party_.heroes[best].away = true;
                 shout(i, "Проглатывает!");
-                log.push_back(fmt("%s проглатывает %s! Нужно нанести 55 урона.", enemies_[i].name.c_str(),
-                                  party_.heroes[best].name.c_str()));
+                log.push_back(fmt("%s проглатывает %s! Нужно нанести %d урона.", enemies_[i].name.c_str(),
+                                  party_.heroes[best].name.c_str(), swallowLeft_));
                 return;
             }
             break;
@@ -661,13 +681,16 @@ std::string Combat::status() const {
             if (dev >= 0 && enemies_[dev].cd > 0) return fmt("Пожиратель проголодается через %d р.", enemies_[dev].cd);
             return "Пожиратель готов проглотить героя!";
         }
-        case BossKnight:   return "Броня ЗАЩ 10: магия Мага её игнорирует";
+        case BossKnight: {
+            int k = findBoss(BossKnight);
+            return fmt("Броня ЗАЩ %d: магия Мага её игнорирует", k >= 0 ? enemies_[k].def : 0);
+        }
         case BossArchmage: return "Метит в самого раненого героя";
         case BossDruid:    return "Друид крадёт 50% лечения отряда";
         case BossTroll: {
             int t = findBoss(BossTroll);
             if (t >= 0 && enemies_[t].cd == 1) return "Тролль занёс кулак: следующий удар сокрушителен!";
-            return "Тролль готовится к замаху (+7 ЗДР в раунд)";
+            return fmt("Тролль готовится к замаху (+%d ЗДР в раунд)", std::max(1, 7 * scale_.hpPct / 100));
         }
         case BossNecro:
             return anyMinionAlive() ? "Барьер костей: урон по некроманту -75%" : "Барьер пал - бей некроманта!";

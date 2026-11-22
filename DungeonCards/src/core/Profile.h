@@ -27,9 +27,11 @@ const std::vector<Achievement>& achievements();
 struct RunSummary {
     bool victory = false;
     int bossId = -1;
+    int floor = 1;
     std::vector<Role> squad;
     int casualties = 0;    // сколько героев погибало за забег (воскрешённый тоже считается)
     int aliveAtEnd = 0;
+    bool bossRewarded = false; // босс уже учтён (при переходе на след. этаж)
 };
 
 struct RunReward {
@@ -47,12 +49,14 @@ public:
     int artifactsEarned = 0;  // всего заработано
     int runs = 0, wins = 0;
     std::array<int, kBossCount> bossWins{};
-    std::array<int, 8> heroWins{};      // по ролям (Role)
+    std::array<int, 9> heroWins{};      // по ролям (Role)
+    std::array<int, 4> floorWins{};     // победы над боссом на этаже 1..3 (индекс = этаж)
     int flawlessWins = 0, lastStandWins = 0;
     std::set<int> unlocked;
     Meta meta;
 
     RunReward recordRun(const RunSummary& s);
+    RunReward recordFloorClear(const RunSummary& s); // победа над боссом этажа без завершения забега
     bool isUnlocked(int achievementId) const { return unlocked.count(achievementId) > 0; }
     int unlockedCount() const { return static_cast<int>(unlocked.size()); }
     bool buyUpgrade(int upgrade);

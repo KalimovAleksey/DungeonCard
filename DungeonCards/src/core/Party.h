@@ -26,6 +26,7 @@ struct Item {
 
 // Добыча по уровню 1..4 (чем выше сложность комнаты, тем сильнее предмет).
 Item rollLoot(Rng& rng, int tier);
+Item rollLootOfKind(Rng& rng, ItemKind kind, int tier);
 Item makePotion(int tier);                   // зелье заданного уровня (без случайности)
 std::string itemBonusText(const Item& it);   // короткое описание эффекта
 Item upgradeItem(const Item& it);

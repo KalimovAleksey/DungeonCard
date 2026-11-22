@@ -24,7 +24,7 @@ const char* roleAbility(Role r) {
         case Role::Warrior:   return "Провокация: враги чаще целятся в него. Надёжная опора отряда.";
         case Role::Mage:      return "Магия: игнорирует половину защиты врага.";
         case Role::Cleric:    return "Исцеление: на своём ходу лечит самого раненого союзника (АТК+3).";
-        case Role::Rogue:     return "Критический удар: 25% шанс удвоить урон. Замечает ловушки: их урон по отряду снижается до 50-60%.";
+        case Role::Rogue:     return "Критический удар: 25% шанс удвоить урон. Всегда обезвреживает ловушки: урона нет.";
         case Role::Archer:    return "Залп: бьёт двух врагов с 80% урона, а единственную цель - одним выстрелом со 100% урона.";
         case Role::Paladin:   return "Провокация и благословение: после атаки лечит самого раненого на 2.";
         case Role::Berserker: return "Ярость: +50% урона, когда здоровье ниже половины.";
@@ -70,7 +70,10 @@ void Hero::recalc() {
     }
     const int newMax = baseHp + hpB;
     if (alive()) {
-        if (newMax > maxHp) hp += newMax - maxHp;  // бонус к максимуму сразу даёт и здоровье
+        // Текущее здоровье следует за максимальным в обе стороны: надевание предмета
+        // прибавляет и текущее, снятие - возвращает оба значения. Иначе снятие
+        // бесплатно лечило бы героя (макс. упал, текущее осталось).
+        hp += newMax - maxHp;
         hp = std::max(1, std::min(hp, newMax));
     }
     maxHp = newMax;
@@ -108,7 +111,7 @@ std::vector<Hero> heroRoster() {
 
 // ------------------------------------------------------------------- loot
 
-Item rollLoot(Rng& rng, int tier) {
+Item rollLootOfKind(Rng& rng, ItemKind kind, int tier) {
     tier = std::max(1, std::min(4, tier));
     static const char* weapons[4] = {"Ржавый меч", "Стальной клинок", "Зачарованный клинок", "Клинок героя"};
     static const char* armors[4]  = {"Кожаная куртка", "Кольчуга", "Латы", "Драконья чешуя"};
@@ -117,17 +120,14 @@ Item rollLoot(Rng& rng, int tier) {
 
     Item it;
     it.tier = tier;
-    int r = rng.range(1, 100);
-    if (r <= 32) {
-        it.kind = ItemKind::Weapon;
+    it.kind = kind;
+    if (kind == ItemKind::Weapon) {
         it.name = weapons[tier - 1];
         it.power = tier * 2 + rng.range(0, 1);
-    } else if (r <= 60) {
-        it.kind = ItemKind::Armor;
+    } else if (kind == ItemKind::Armor) {
         it.name = armors[tier - 1];
         it.power = tier + rng.range(0, 1);
-    } else if (r <= 82) {
-        it.kind = ItemKind::Relic;
+    } else if (kind == ItemKind::Relic) {
         int e = rng.range(0, 3);
         it.relic = static_cast<RelicEffect>(e);
         it.name = relics[e];
@@ -138,11 +138,20 @@ Item rollLoot(Rng& rng, int tier) {
             case RelicEffect::Vampire:  it.power = 7 * tier; break;
         }
     } else {
-        it.kind = ItemKind::Potion;
         it.name = potions[tier - 1];
         it.power = 10 * tier;
     }
     return it;
+}
+
+Item rollLoot(Rng& rng, int tier) {
+    tier = std::max(1, std::min(4, tier));
+    int r = rng.range(1, 100);
+    ItemKind kind = (r <= 32) ? ItemKind::Weapon
+                  : (r <= 60) ? ItemKind::Armor
+                  : (r <= 82) ? ItemKind::Relic
+                              : ItemKind::Potion;
+    return rollLootOfKind(rng, kind, tier);
 }
 
 Item makePotion(int tier) {

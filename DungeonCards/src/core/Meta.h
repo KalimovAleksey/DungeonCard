@@ -32,7 +32,7 @@ struct UpgradeInfo {
 
 const UpgradeInfo& upgradeInfo(int upgrade);
 
-constexpr int kBaseReviveCost = 50;     // воскрешение за монеты на привале
+constexpr int kBaseReviveCost = 75;     // полная цена гарантированного воскрешения за монеты
 constexpr int kBaseRestHealPct = 40;    // лечение на привале
 
 struct Meta {

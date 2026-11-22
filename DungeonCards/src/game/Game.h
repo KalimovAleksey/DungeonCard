@@ -130,6 +130,8 @@ private:
     void updateInventory();
     void updateShop();
     void updateForge();
+    void updateBossReward();
+    bool updateDevPanel();
     void onRunStep();
     void spawnActions();
     void updateAnims(float dt);
@@ -146,6 +148,8 @@ private:
     void drawInventory();
     void drawShop();
     void drawForge();
+    void drawBossReward();
+    void drawDevPanel();
     void drawBossCard(int x, int y, int w, int h, int bossId) const;
     void drawBossIntro();
     void drawResult();
@@ -211,6 +215,7 @@ private:
     RunReward lastReward_;               // награда за последний забег (для экрана итога)
     bool runRecorded_ = false;
     std::string legacyMsg_;
+    float achScroll_ = 0.f;
     std::vector<Resolution> resolutions_;
     RenderTexture2D target_{};
     bool quit_ = false;
@@ -262,6 +267,11 @@ private:
     std::vector<Floater> floaters_;
     Flash heroFlash_[kMaxRoster];
     Flash enemyFlash_[kMaxRoster];
+
+    // интерфейс разработчика
+    bool devOpen_ = false;
+    int devItemTier_ = 4;
+    std::string devMsg_;
 };
 
 }  // namespace dc
