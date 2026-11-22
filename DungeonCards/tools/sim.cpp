@@ -12,18 +12,20 @@
 
 using namespace dc;
 
-// индексы в heroRoster(): 0 Воин, 1 Маг, 2 Жрица, 3 Вор, 4 Лучник, 5 Паладин, 6 Берсерк, 7 Друид
+// индексы в heroRoster(): 0 Воин, 1 Маг, 2 Жрица, 3 Вор, 4 Лучник, 5 Паладин, 6 Берсерк, 7 Друид, 8 Бард
+static constexpr int kClassCount = static_cast<int>(Role::Bard) + 1;
 static std::vector<int> smartTeam(int boss) {
-    // найдено перебором всех 70 составов (режим search)
+    // пересчитано перебором всех 126 составов из 9 героев (balance_sim ... search, 80 партий на состав)
+    // для Слизня и Некроманта учтён бонус Лучника против призывов
     switch (boss) {
-        case BossSlime:    return {1, 2, 3, 5};  // Маг Жрица Вор Паладин
-        case BossDevourer: return {2, 3, 5, 7};  // Жрица Вор Паладин Друид
-        case BossKnight:   return {1, 2, 5, 7};  // Маг Жрица Паладин Друид
-        case BossArchmage: return {0, 2, 5, 7};  // Воин Жрица Паладин Друид
-        case BossDruid:    return {2, 3, 5, 6};  // Жрица Вор Паладин Берсерк
-        case BossTroll:    return {0, 2, 5, 7};  // Воин Жрица Паладин Друид
-        case BossNecro:    return {0, 2, 3, 5};  // Воин Жрица Вор Паладин
-        default:           return {2, 5, 6, 7};  // дракон: Жрица Паладин Берсерк Друид
+        case BossSlime:    return {0, 2, 4, 7};  // Воин Жрица Лучник Друид
+        case BossDevourer: return {0, 2, 5, 7};  // Воин Жрица Паладин Друид
+        case BossKnight:   return {2, 3, 5, 7};  // Жрица Вор Паладин Друид
+        case BossArchmage: return {3, 5, 7, 8};  // Вор Паладин Друид Бард
+        case BossDruid:    return {3, 5, 7, 8};  // Вор Паладин Друид Бард
+        case BossTroll:    return {0, 2, 6, 8};  // Воин Жрица Берсерк Бард
+        case BossNecro:    return {2, 3, 4, 5};  // Жрица Вор Лучник Паладин
+        default:           return {1, 2, 3, 7};  // дракон: Маг Жрица Вор Друид
     }
 }
 
@@ -147,7 +149,24 @@ static Dir dirTo(Vec2i a, Vec2i b) {
     return b.y > a.y ? South : North;
 }
 
-struct Result { bool win = false; int cleared = 0; bool reachedBoss = false; bool shopConnected = false; };
+// printf считает ширину %Ns в байтах, а не в символах - кириллица разъезжает таблицу.
+static std::string padUtf8(const std::string& s, int width) {
+    int chars = 0;
+    for (unsigned char c : s)
+        if ((c & 0xC0) != 0x80) ++chars;   // не продолжающий байт
+    std::string out = s;
+    for (int i = chars; i < width; ++i) out += ' ';
+    return out;
+}
+
+struct Result {
+    bool win = false;
+    int cleared = 0;
+    bool reachedBoss = false;
+    bool shopConnected = false;
+    std::vector<int> roles;      // индексы классов heroRoster() в порядке отряда
+    std::vector<bool> survived;  // выжил ли каждый из них к концу забега
+};
 
 static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems, int buildPolicy,
                       const std::vector<int>* fixedTeam = nullptr, const Meta* meta = nullptr) {
@@ -200,9 +219,10 @@ static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems,
     } else if (smartTeamPick) {
         for (int i : smartTeam(bossId)) squad.push_back(roster[i]);
     } else {
-        std::vector<int> ids = {0, 1, 2, 3, 4, 5, 6, 7};
+        std::vector<int> ids;
+        for (size_t i = 0; i < roster.size(); ++i) ids.push_back(static_cast<int>(i));
         rng.shuffle(ids);
-        for (int i = 0; i < 4; ++i) squad.push_back(roster[ids[i]]);
+        for (int i = 0; i < 4 && i < static_cast<int>(ids.size()); ++i) squad.push_back(roster[ids[i]]);
     }
 
     RunOptions options;
@@ -225,7 +245,7 @@ static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems,
                             if (!p.heroes[i].alive() &&
                                 (dead < 0 || weight(p.heroes[i], Item{"", ItemKind::Weapon, 1, 1}) > weight(p.heroes[dead], Item{"", ItemKind::Weapon, 1, 1})))
                                 dead = i;
-                        if (dead < 0 || p.coins < Run::kReviveCost) break;
+                        if (dead < 0 || p.coins < run.reviveCoinCost()) break;
                         run.restRevive(dead);
                     }
                 }
@@ -300,33 +320,57 @@ static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems,
                 break;
         }
     }
-    return {run.phase() == RunPhase::Victory, run.roomsCleared(), reached, shopConn};
+    Result out;
+    out.win = run.phase() == RunPhase::Victory;
+    out.cleared = run.roomsCleared();
+    out.reachedBoss = reached;
+    out.shopConnected = shopConn;
+    for (size_t i = 0; i < squad.size(); ++i) {
+        out.roles.push_back(static_cast<int>(squad[i].role));
+        out.survived.push_back(i < run.party().heroes.size() && run.party().heroes[i].alive());
+    }
+    return out;
 }
 
-// Перебор всех 70 составов отряда для каждого босса (умная раздача предметов).
+// У боссов с призывами (скелеты Некроманта, деления Слизня) залп Лучника бьёт
+// сразу двух врагов. В проценте побед это не всегда видно на малой выборке,
+// поэтому при выборе состава для таких боссов добавляем Лучнику бонус.
+static bool bossHasAdds(int boss) { return boss == BossNecro || boss == BossSlime; }
+static constexpr double kArcherAddsBonus = 10.0;
+
+// Перебор всех C(9,4) = 126 составов отряда для каждого босса (умная раздача предметов).
 static void searchTeams(int games, int policy) {
     auto roster = heroRoster();
     for (int boss = 0; boss < kBossCount; ++boss) {
-        double best = -1, worst = 101, sum = 0;
+        double best = -1, bestRaw = 0, worst = 101, sum = 0;
         std::vector<int> bestT, worstT;
         int n = 0;
-        for (int a = 0; a < 8; ++a) for (int b = a + 1; b < 8; ++b) for (int c = b + 1; c < 8; ++c) for (int d = c + 1; d < 8; ++d) {
-            std::vector<int> team = {a, b, c, d};
-            int w = 0, p = 0;
-            for (int g = 0; g < games; ++g) {
-                Result r = playOne(g * 8 + boss, boss, false, true, policy, &team);
-                if (r.cleared < 0) continue;
-                ++p;
-                if (r.win) ++w;
-            }
-            double pct = 100.0 * w / std::max(1, p);
-            sum += pct; ++n;
-            if (pct > best) { best = pct; bestT = team; }
-            if (pct < worst) { worst = pct; worstT = team; }
-        }
+        for (int a = 0; a < kClassCount; ++a)
+            for (int b = a + 1; b < kClassCount; ++b)
+                for (int c = b + 1; c < kClassCount; ++c)
+                    for (int d = c + 1; d < kClassCount; ++d) {
+                        std::vector<int> team = {a, b, c, d};
+                        int w = 0, p = 0;
+                        for (int g = 0; g < games; ++g) {
+                            Result r = playOne(g * 8 + boss, boss, false, true, policy, &team);
+                            if (r.cleared < 0) continue;
+                            ++p;
+                            if (r.win) ++w;
+                        }
+                        double pct = 100.0 * w / std::max(1, p);
+                        bool archer = false;
+                        for (int id : team) if (id == static_cast<int>(Role::Archer)) archer = true;
+                        const double score = pct + (archer && bossHasAdds(boss) ? kArcherAddsBonus : 0.0);
+                        sum += pct; ++n;
+                        if (score > best) { best = score; bestRaw = pct; bestT = team; }
+                        if (pct < worst) { worst = pct; worstT = team; }
+                    }
         auto name = [&](const std::vector<int>& t) { std::string s; for (int i : t) s += roster[i].name + " "; return s; };
-        std::printf("%-18s лучший %5.1f%% [%s] худший %5.1f%% [%s] средний %5.1f%%\n", bossInfo(boss).name.c_str(),
-                    best, name(bestT).c_str(), worst, name(worstT).c_str(), sum / n);
+        std::printf("%-18s лучший %5.1f%% (оценка %5.1f) [%s] худший %5.1f%% [%s] средний %5.1f%%\n", bossInfo(boss).name.c_str(),
+                    bestRaw, best, name(bestT).c_str(), worst, name(worstT).c_str(), sum / n);
+        std::string ids;
+        for (size_t i = 0; i < bestT.size(); ++i) ids += (i ? ", " : "") + std::to_string(bestT[i]);
+        std::printf("        case %d: return {%s};  // %s\n", boss, ids.c_str(), name(bestT).c_str());
     }
 }
 
@@ -380,6 +424,9 @@ int main(int argc, char** argv) {
     int shopSeen[4] = {};
     int shopPlayed[4] = {};
     int played[4][kBossCount] = {};
+    int classPlayed[4][kClassCount] = {};
+    int classWins[4][kClassCount] = {};
+    int classSurvived[4][kClassCount] = {};
     for (int c = 0; c < 4; ++c)
         for (int g = 0; g < games; ++g) {
             int boss = g % kBossCount;
@@ -390,6 +437,13 @@ int main(int argc, char** argv) {
             if (r.reachedBoss) ++reach[c];
             ++shopPlayed[c];
             if (r.shopConnected) ++shopSeen[c];
+            for (size_t i = 0; i < r.roles.size() && i < r.survived.size(); ++i) {
+                const int cls = r.roles[i];
+                if (cls < 0 || cls >= kClassCount) continue;
+                ++classPlayed[c][cls];
+                if (r.win) ++classWins[c][cls];
+                if (r.survived[i]) ++classSurvived[c][cls];
+            }
         }
     for (int c = 0; c < 4; ++c) {
         int w = 0, p = 0;
@@ -400,4 +454,24 @@ int main(int argc, char** argv) {
     for (int b = 0; b < kBossCount; ++b)
         std::printf("  %-18s %5.1f%% / %5.1f%%\n", bossInfo(b).name.c_str(),
                     100.0 * wins[0][b] / std::max(1, played[0][b]), 100.0 * wins[3][b] / std::max(1, played[3][b]));
+
+    const auto roster = heroRoster();
+    std::printf("\nПо классам (победы / выжил, %% от забегов с этим классом в отряде):\n");
+    const char* heads[5] = {"класс", "наивная", "отряд под босса", "умные предметы", "всё умное"};
+    for (int i = 0; i < 5; ++i) std::printf("  %s", padUtf8(heads[i], i == 0 ? 10 : 16).c_str());
+    std::printf("\n");
+    for (int cls = 0; cls < kClassCount && cls < static_cast<int>(roster.size()); ++cls) {
+        std::printf("  %s", padUtf8(roster[cls].name, 10).c_str());
+        for (int c = 0; c < 4; ++c) {
+            const int p = classPlayed[c][cls];
+            char cell[32];
+            if (p == 0)
+                std::snprintf(cell, sizeof(cell), "-");
+            else
+                std::snprintf(cell, sizeof(cell), "%4.1f%% / %4.1f%%",
+                              100.0 * classWins[c][cls] / p, 100.0 * classSurvived[c][cls] / p);
+            std::printf("  %s", padUtf8(cell, 16).c_str());
+        }
+        std::printf("\n");
+    }
 }

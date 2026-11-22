@@ -26,6 +26,14 @@ struct Enemy {
 std::vector<Enemy> makeEnemies(int difficulty, Rng& rng, int coinBonusPct = 0);  // группа врагов по сложности 1..3
 Enemy makeBoss(int bossId);
 
+// Масштабирование врагов по этажам. Один и тот же множитель применяется ко всем
+// врагам боя, включая призывов и порождения, чтобы этаж нельзя было «обойти».
+struct EnemyScale {
+    int hpPct = 100, atkPct = 100, defBonus = 0, coinPct = 100;
+};
+EnemyScale enemyScaleForFloor(int floor);
+void scaleEnemy(Enemy& e, const EnemyScale& scale);
+
 // Описание попадания/лечения: по нему интерфейс рисует числа и вспышки.
 struct CombatHit {
     bool targetHero = false;
@@ -50,7 +58,7 @@ struct CombatAction {
 // Автобой: один вызов step() = одно действие одного участника.
 class Combat {
 public:
-    Combat(Party& party, std::vector<Enemy> enemies, Rng& rng, int bossId = -1);
+    Combat(Party& party, std::vector<Enemy> enemies, Rng& rng, int bossId = -1, int floor = 1);
 
     void step(std::vector<std::string>& log);
     bool finished() const;
@@ -102,6 +110,7 @@ private:
     int bossId_ = -1;
     int slotCount_ = 1;
     int dmgReducePct_ = 0;
+    EnemyScale scale_;
 
     // механики боссов
     int swallowed_ = -1;       // индекс проглоченного героя

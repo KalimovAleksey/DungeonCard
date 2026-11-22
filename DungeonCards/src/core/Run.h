@@ -30,10 +30,13 @@ public:
     static constexpr int kBuffAtk = 3;       // бафф на привале
     static constexpr int kBuffDef = 1;
     static constexpr int kBuffTargets = 2;
-    static constexpr int kReviveCost = kBaseReviveCost;    // воскрешение за монеты (без улучшений)
-    static constexpr int kReviveArtifactCost = 1;           // воскрешение за артефакт
-    static constexpr int kReviveArtifactPct = 75;           // здоровье после воскрешения за артефакт
-    static constexpr int kRevivePct = 50;    // сколько здоровья у воскрешённого
+    static constexpr int kReviveCost = kBaseReviveCost;    // полная цена воскрешения за монеты (без улучшений)
+    static constexpr int kReviveArtifactCost = 2;          // полная цена воскрешения за артефакты
+    static constexpr int kReviveArtifactPct = 75;          // здоровье после воскрешения за артефакт
+    static constexpr int kRevivePct = 50;                   // здоровье после воскрешения за монеты
+    static constexpr int kFreeRevivePct = 30;               // здоровье после удачной бесплатной попытки
+    static constexpr int kTrapNoticePct = 25;               // шанс заметить ловушку без вора
+    static constexpr int kTrapCoinPerDifficulty = 10;       // монеты за ловушку за единицу сложности
 
     Run(const Dungeon& dungeon, uint32_t seed, std::vector<Hero> heroes = {}, RunOptions options = {});
     Run(const Dungeon& dungeon, uint32_t seed, Party party, int floor, RunOptions options = {});
@@ -59,14 +62,18 @@ public:
     void restHeal();
     void restBuff(const std::vector<int>& heroIndexes);
     bool canRestRevive() const;
-    int reviveChancePct() const;
-    void restReviveRandom();
+    int reviveChancePct() const;                  // базовый шанс: 25% (50% при живом жреце)
+    bool canRestReviveFree() const;               // доступна ли бесплатная попытка (один раз за привал)
+    bool freeReviveUsed() const { return freeReviveUsed_; }
+    bool restReviveFree(int heroIndex);           // бесплатная попытка по выбранному герою; привал продолжается
     int restHealPct() const;
     bool hasLivingArcher() const;
     bool hasLivingBard() const;
-    bool restRevive(int heroIndex);           // за монеты; привал продолжается
-    bool restReviveArtifact(int heroIndex);   // за артефакт (постоянная валюта), здоровья больше
-    int reviveCoinCost() const { return meta_.reviveCoinCost(); }
+    bool restRevive(int heroIndex);               // доплата монетами до 100%; привал продолжается
+    bool restReviveArtifact(int heroIndex);       // доплата артефактами до 100%; здоровья больше
+    int fullReviveCoinCost() const { return meta_.reviveCoinCost(); }
+    int reviveCoinCost() const;                   // доплата монетами за недостающий шанс
+    int reviveArtifactCost() const;               // доплата артефактами за недостающий шанс
     int artifacts() const { return artifacts_; }    // артефакты, оставшиеся у игрока
     const Meta& meta() const { return meta_; }
     int casualties() const;                          // сколько героев погибало за забег
@@ -137,6 +144,7 @@ private:
     std::vector<Item> bossReward_;
     bool bossRewardClaimed_ = false;
     bool bossRewardedRecorded_ = false;
+    bool freeReviveUsed_ = false;  // на привале разрешена только одна бесплатная попытка
     int cleared_ = 0;
     std::map<Vec2i, std::vector<ShopOffer>> stocks_;  // лоты торговцев (по комнатам)
 };

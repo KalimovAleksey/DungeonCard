@@ -1023,11 +1023,11 @@ void Game::updateRestChoice() {
             std::fill(std::begin(restPick_), std::end(restPick_), false);
         } else if (IsKeyPressed(KEY_THREE) || (click && inRect(m, kGridX + 486, by, bw, bh))) {
             const bool canCoins = run_->party().coins >= run_->reviveCoinCost();
-            const bool canArtifact = run_->artifacts() >= Run::kReviveArtifactCost;
+            const bool canArtifact = run_->artifacts() >= run_->reviveArtifactCost();
             if (!anyDead) restMsg_ = "Павших героев нет.";
-            else if (!canCoins && !canArtifact)
-                restMsg_ = fmt("Нужно %d монет или %d артефакт. Есть: %d монет, %d артефактов.", run_->reviveCoinCost(),
-                               Run::kReviveArtifactCost, run_->party().coins, run_->artifacts());
+            else if (!run_->canRestReviveFree() && !canCoins && !canArtifact)
+                restMsg_ = fmt("Бесплатная попытка использована. Нужно %d монет или %d артефакта. Есть: %d монет, %d артефактов.",
+                               run_->reviveCoinCost(), run_->reviveArtifactCost(), run_->party().coins, run_->artifacts());
             else {
                 restStage_ = 2;
                 restMsg_.clear();
@@ -1036,7 +1036,7 @@ void Game::updateRestChoice() {
         return;
     }
 
-    // стадия 2: выбор павшего героя и способа оплаты (монеты или артефакт)
+    // стадия 2: выбор павшего героя и способа воскрешения (бесплатно, монеты, артефакты)
     if (restStage_ == 2) {
         std::vector<int> dead;
         for (int i = 0; i < static_cast<int>(hs.size()) && i < kMaxRoster; ++i)
@@ -1047,16 +1047,19 @@ void Game::updateRestChoice() {
         }
         for (int k = 0; k < static_cast<int>(dead.size()); ++k) {
             const int heroIdx = dead[k];
-            const int rx = kGridX + 40, ry = kGridY + 100 + k * 84;
-            const bool onCoin = click && inRect(m, rx + 400, ry + 14, 112, 44);
-            const bool onArtifact = click && inRect(m, rx + 520, ry + 14, 112, 44);
-            if (!onCoin && !onArtifact) continue;
+            const int rx = kGridX + 40, ry = kGridY + 112 + k * 84;
+            const bool onFree = click && inRect(m, rx + 302, ry + 14, 106, 44);
+            const bool onCoin = click && inRect(m, rx + 416, ry + 14, 106, 44);
+            const bool onArtifact = click && inRect(m, rx + 530, ry + 14, 106, 44);
+            if (!onFree && !onCoin && !onArtifact) continue;
 
+            // 0 - бесплатная попытка, 1 - монеты, 2 - артефакты
+            const int way = onFree ? 0 : onCoin ? 1 : 2;
             bool ok = false;
-            bool usedArtifact = false;
-            if (onArtifact) {
+            if (way == 0) {
+                ok = run_->restReviveFree(heroIdx);
+            } else if (way == 2) {
                 ok = run_->restReviveArtifact(heroIdx);
-                usedArtifact = true;
                 if (ok) {
                     profile_.artifacts = run_->artifacts();
                     saveProfile();
@@ -1066,11 +1069,13 @@ void Game::updateRestChoice() {
             }
 
             if (ok) {
-                restMsg_ = fmt("%s воскрешён: %d%% здоровья.", hs[heroIdx].name.c_str(),
-                               usedArtifact ? Run::kReviveArtifactPct : Run::kRevivePct);
+                const int pct = way == 0 ? Run::kFreeRevivePct : way == 2 ? Run::kReviveArtifactPct : Run::kRevivePct;
+                restMsg_ = fmt("%s воскрешён: %d%% здоровья.", hs[heroIdx].name.c_str(), pct);
                 restStage_ = 0;
+            } else if (way == 0) {
+                restMsg_ = fmt("Попытка не удалась (шанс %d%%). Можно доплатить за гарантию.", run_->reviveChancePct());
             } else {
-                restMsg_ = usedArtifact ? "Нет артефактов." : "Не хватает монет.";
+                restMsg_ = way == 2 ? "Не хватает артефактов." : "Не хватает монет.";
             }
             return;
         }
@@ -2247,15 +2252,16 @@ void Game::drawRestOverlay() {
 
         bool anyDead = false;
         for (const auto& h : hs) anyDead |= !h.alive();
-        const bool canRevive = anyDead && (run_->party().coins >= run_->reviveCoinCost() || run_->artifacts() >= Run::kReviveArtifactCost);
+        const bool canRevive = anyDead && (run_->canRestReviveFree() || run_->party().coins >= run_->reviveCoinCost() ||
+                                          run_->artifacts() >= run_->reviveArtifactCost());
 
         const int bw = 224, bh = 220, by = kGridY + 130;
         const char* titles[3] = {"[1] Лечение", "[2] Усиление", "[3] Воскрешение"};
         const std::string descs[3] = {
             fmt("Все живые герои восстанавливают %d%% максимального здоровья.", run_->restHealPct()),
             fmt("Выбери двух героев: каждый получит +%d АТК и +%d ЗАЩ до конца похода.", Run::kBuffAtk, Run::kBuffDef),
-            fmt("Вернуть павшего героя: за %d монет (%d%% ЗДР) или за %d артефакт (%d%% ЗДР). Можно повторять.", run_->reviveCoinCost(),
-                Run::kRevivePct, Run::kReviveArtifactCost, Run::kReviveArtifactPct)};
+            fmt("Бесплатный шанс: %d%%. Гарантия: %d монет или %d артефакта. Можно повторять.",
+                run_->reviveChancePct(), run_->reviveCoinCost(), run_->reviveArtifactCost())};
         const Color titleCols[3] = {kHeal, kAccent, kCoin};
         for (int k = 0; k < 3; ++k) {
             const int bx = kGridX + 14 + k * 236;
@@ -2271,8 +2277,9 @@ void Game::drawRestOverlay() {
             }
             if (k == 2) {
                 if (!anyDead) drawText("Павших героев нет", static_cast<float>(bx + 14), static_cast<float>(by + bh - 28), 15, kDim);
-                else if (!canRevive) drawText("Не хватает монет и артефактов", static_cast<float>(bx + 14), static_cast<float>(by + bh - 28), 15, kBad);
-                else drawText("Доступно", static_cast<float>(bx + 14), static_cast<float>(by + bh - 28), 15, kGood);
+                else if (!canRevive) drawText("Нет попытки, монет и артефактов", static_cast<float>(bx + 14), static_cast<float>(by + bh - 28), 15, kBad);
+                else if (!run_->canRestReviveFree()) drawText("Только за плату", static_cast<float>(bx + 14), static_cast<float>(by + bh - 28), 15, kCoin);
+                else drawText(fmt("Бесплатно: шанс %d%%", run_->reviveChancePct()), static_cast<float>(bx + 14), static_cast<float>(by + bh - 28), 15, kGood);
             }
         }
         if (!restMsg_.empty()) drawText(restMsg_, kGridX + 16.f, kGridY + 358.f, 16, kAccent);
@@ -2291,7 +2298,11 @@ void Game::drawRestOverlay() {
 
     if (restStage_ == 2) {
         drawTextCentered("ВОСКРЕШЕНИЕ", cx, kGridY + 22.f, 34, kCoin);
-        drawTextCentered("Выбери павшего героя и способ оплаты", cx, kGridY + 64.f, 18, kDim);
+        drawTextCentered("Выбери павшего героя", cx, kGridY + 64.f, 18, kDim);
+        drawTextCentered(fmt("Бесплатно: шанс %d%%  |  Гарантия: %d мон. или %d арт.  |  ЗДР: %d / %d / %d%%",
+                             run_->reviveChancePct(), run_->reviveCoinCost(), run_->reviveArtifactCost(),
+                             Run::kFreeRevivePct, Run::kRevivePct, Run::kReviveArtifactPct),
+                         cx, kGridY + 88.f, 14, kDim);
         drawCoin(kGridX + 560.f, kGridY + 30.f, 10.f);
         drawText(fmt("%d", run_->party().coins), kGridX + 576.f, kGridY + 18.f, 20, kCoin);
         drawArtifact(kGridX + 640.f, kGridY + 30.f, 10.f);
@@ -2306,24 +2317,29 @@ void Game::drawRestOverlay() {
         for (int k = 0; k < static_cast<int>(dead.size()); ++k) {
             const int i = dead[k];
             const Hero& h = hs[i];
-            const int rx = kGridX + 40, ry = kGridY + 100 + k * 84;
+            const int rx = kGridX + 40, ry = kGridY + 112 + k * 84;
             DrawRectangle(rx, ry, 640, 72, kPanel);
             DrawRectangleLines(rx, ry, 640, 72, kGridLine);
             drawIconBox(heroArt(h.role), "", Color{70, 70, 78, 255}, firstGlyph(h.name),
                         rx + 12.f, ry + 12.f, 48.f, Color{150, 150, 160, 255});
             drawText(fmt("%s  (пал)", h.name.c_str()), static_cast<float>(rx + 74), static_cast<float>(ry + 10), 22, kDim);
-            drawText(fmt("После воскрешения: %d%% или %d%% ЗДР", Run::kRevivePct, Run::kReviveArtifactPct),
+            drawText(fmt("ЗДР: %d%% / %d%% / %d%%", Run::kFreeRevivePct, Run::kRevivePct, Run::kReviveArtifactPct),
                      static_cast<float>(rx + 74), static_cast<float>(ry + 40), 15, kDim);
 
+            const bool canFree = run_->canRestReviveFree();
             const bool canCoin = run_->party().coins >= run_->reviveCoinCost();
-            const bool canArt = run_->artifacts() >= Run::kReviveArtifactCost;
-            R coinBtn{rx + 400, ry + 14, 112, 44};
-            R artBtn{rx + 520, ry + 14, 112, 44};
+            const bool canArt = run_->artifacts() >= run_->reviveArtifactCost();
+            R freeBtn{rx + 302, ry + 14, 106, 44};
+            R coinBtn{rx + 416, ry + 14, 106, 44};
+            R artBtn{rx + 530, ry + 14, 106, 44};
+            drawButton(freeBtn.x, freeBtn.y, freeBtn.w, freeBtn.h, fmt("%d%% шанс", run_->reviveChancePct()), false, canFree);
             drawButton(coinBtn.x, coinBtn.y, coinBtn.w, coinBtn.h, fmt("%d мон.", run_->reviveCoinCost()), false, canCoin);
-            drawButton(artBtn.x, artBtn.y, artBtn.w, artBtn.h, fmt("%d арт.", Run::kReviveArtifactCost), false, canArt);
+            drawButton(artBtn.x, artBtn.y, artBtn.w, artBtn.h, fmt("%d арт.", run_->reviveArtifactCost()), false, canArt);
         }
+        if (!run_->canRestReviveFree())
+            drawTextCentered("Бесплатная попытка в этом привале уже использована", cx, kGridY + kArenaH - 84.f, 14, kDim);
         if (!restMsg_.empty()) drawTextCentered(restMsg_, cx, kGridY + kArenaH - 62.f, 16, kAccent);
-        drawTextCentered("Клик по кнопке оплаты    B - назад", cx, kGridY + kArenaH - 36.f, 18, kAccent);
+        drawTextCentered("Клик по кнопке    B - назад", cx, kGridY + kArenaH - 36.f, 18, kAccent);
         return;
     }
 
