@@ -15,6 +15,7 @@ const char* roleTitle(Role r) {
         case Role::Berserker: return "Яростный боец";
         case Role::Druid:     return "Лекарь группы";
         case Role::Bard:      return "Вдохновитель";
+        case Role::Seidmard:  return "Разрушитель брони";
     }
     return "";
 }
@@ -22,14 +23,15 @@ const char* roleTitle(Role r) {
 const char* roleAbility(Role r) {
     switch (r) {
         case Role::Warrior:   return "Провокация: враги чаще целятся в него. Надёжная опора отряда.";
-        case Role::Mage:      return "Магия: игнорирует половину защиты врага.";
         case Role::Cleric:    return "Исцеление: на своём ходу лечит самого раненого союзника (АТК+3).";
         case Role::Rogue:     return "Критический удар: 25% шанс удвоить урон. Всегда обезвреживает ловушки: урона нет.";
         case Role::Archer:    return "Залп: бьёт двух врагов с 80% урона, а единственную цель - одним выстрелом со 100% урона.";
         case Role::Paladin:   return "Провокация и благословение: после атаки лечит самого раненого на 2.";
-        case Role::Berserker: return "Ярость: +50% урона, когда здоровье ниже половины.";
-        case Role::Druid:     return "Цепное лечение: лечит союзников по цепочке.";
+        case Role::Berserker: return "Ярость: доп. удар ниже половины ЗДР; аура: вампиризм 10% всей группе.";
+        case Role::Druid:     return "Цепное лечение: 6/5/4/3+половина ЗАЩ всем союзникам после атаки.";
         case Role::Bard:      return "Вдохновение: усиливает сильнейшего союзника в бою; даёт скидку у торговца.";
+        case Role::Mage:      return "Магия: игнорирует половину ЗАЩ; каждый 3-й ход после атаки - арканный взрыв по всем врагам (60% АТК).";
+        case Role::Seidmard:  return "Руна: -2 ЗАЩ самому защищённому врагу (до -6) за удар; затем магия 50% АТК. Кузница: -20%.";
     }
     return "";
 }
@@ -98,14 +100,15 @@ Hero makeHero(const std::string& name, Role role, int hp, int atk, int def, int 
 std::vector<Hero> heroRoster() {
     return {
         makeHero("Воин",    Role::Warrior,   40, 8, 3, 4),
-        makeHero("Маг",     Role::Mage,      26, 11, 1, 5),
+        makeHero("Маг",     Role::Mage,      26, 10, 1, 5),  // АТК снижен с 11: появился арканный взрыв
         makeHero("Жрица",   Role::Cleric,    30, 5, 2, 3),
         makeHero("Вор",     Role::Rogue,     28, 9, 2, 7),
         makeHero("Лучник",  Role::Archer,    28, 10, 1, 6),
         makeHero("Паладин", Role::Paladin,   38, 6, 4, 3),
-        makeHero("Берсерк", Role::Berserker, 34, 10, 1, 5),
+        makeHero("Берсерк", Role::Berserker, 40, 11, 2, 5),
         makeHero("Друид",   Role::Druid,     27, 4, 1, 4),
         makeHero("Бард",    Role::Bard,      29, 6, 2, 4),
+        makeHero("Сейдмард", Role::Seidmard,  29, 10, 2, 5),  // стартовые значения после балансировки
     };
 }
 
@@ -211,6 +214,12 @@ int itemPrice(const Item& it) {
         case ItemKind::Potion: return potion[t];
     }
     return 0;
+}
+
+int itemSellPrice(const Item& it) {
+    // Торговец выкупает вещь за половину стоимости - продажа никогда не
+    // окупает покупку полностью, но позволяет вернуть часть монет.
+    return std::max(1, itemPrice(it) / 2);
 }
 
 std::vector<ShopOffer> makeShopStock(Rng& rng, int count, int discountPct) {

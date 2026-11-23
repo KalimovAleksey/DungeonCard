@@ -6,7 +6,7 @@
 
 namespace dc {
 
-enum class Role { Warrior, Mage, Cleric, Rogue, Archer, Paladin, Berserker, Druid, Bard };
+enum class Role { Warrior, Mage, Cleric, Rogue, Archer, Paladin, Berserker, Druid, Bard, Seidmard };
 
 inline bool isHealer(Role r) { return r == Role::Cleric || r == Role::Druid; }
 inline bool isTank(Role r) { return r == Role::Warrior || r == Role::Paladin; }
@@ -15,6 +15,10 @@ const char* roleAbility(Role r);  // описание умения
 
 enum class ItemKind { Weapon, Armor, Relic, Potion };
 enum class RelicEffect { Vitality, Haste, Keen, Vampire };
+
+// Аура Берсерка: уменьшенный вампиризм (10% вместо прежних 20% только себе)
+// получают все герои, если Берсерк выбран в отряде.
+constexpr int kBerserkerAuraVampPct = 10;
 
 struct Item {
     std::string name;
@@ -65,7 +69,8 @@ struct ShopOffer {
     int price = 0;
     bool sold = false;
 };
-int itemPrice(const Item& it);                              // цена в монетах
+int itemPrice(const Item& it);                              // цена покупки в монетах
+int itemSellPrice(const Item& it);                          // выкуп торговца: 50% от цены, но не меньше 1
 std::vector<ShopOffer> makeShopStock(Rng& rng, int count, int discountPct = 0);  // т1 часто, т2 нередко, т3 редко
 
 class Party {

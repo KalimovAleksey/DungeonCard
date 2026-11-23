@@ -7,6 +7,8 @@
 namespace dc {
 
 namespace {
+constexpr int kRuneStep = 2;    // сколько ЗАЩ снимает одна руна
+constexpr int kRuneMax = 6;     // предел снятия ЗАЩ с одной цели за бой
 int minDmg(int atk) { return std::max(1, atk / 4); }
 // Урон с учётом защиты; даже против брони проходит не меньше 25% АТК.
 int calcDmg(int atk, int def) { return std::max(minDmg(atk), atk - def); }
@@ -84,7 +86,8 @@ void scaleEnemy(Enemy& e, const EnemyScale& scale) {
 }
 
 Combat::Combat(Party& party, std::vector<Enemy> enemies, Rng& rng, int bossId, int floor)
-    : party_(party), enemies_(std::move(enemies)), rng_(rng), bossId_(bossId), scale_(enemyScaleForFloor(floor)) {
+    : party_(party), enemies_(std::move(enemies)), rng_(rng), bossId_(bossId), scale_(enemyScaleForFloor(floor)),
+      arcaneCharge_(party.heroes.size(), 0) {
     for (auto& e : enemies_) scaleEnemy(e, scale_);
     enemies_.reserve(16);  // ссылки на врагов не должны «ломаться» при призыве/делении
     slotCount_ = std::max<int>(1, static_cast<int>(enemies_.size()));
@@ -298,8 +301,10 @@ void Combat::step(std::vector<std::string>& log) {
 // ----------------------------------------------------------------- герои
 
 int Combat::heroDamage(const Hero& h, const Enemy& e, int atkValue, bool magic, bool ranged) const {
-    int eff = e.def;
-    if (magic) eff = (e.bossId == BossKnight) ? 0 : e.def / 2;  // магия: полпрозрачная защита, у рыцаря - вся
+    // Руны Сейдмарда снимают часть ЗАЩ для ВСЕХ героев, обычные и магические атаки.
+    const int def = std::max(0, e.def - e.defShred);
+    int eff = def;
+    if (magic) eff = (e.bossId == BossKnight) ? 0 : def / 2;  // магия: полпрозрачная защита, у рыцаря - вся
     int dmg = calcDmg(atkValue, eff);
     if (ranged && e.bossId == BossDragon) dmg = dmg * 13 / 10;  // дракон уязвим к дальнему бою
     if (e.bossId == BossNecro && e.boss && anyMinionAlive()) dmg = std::max(1, dmg / 4);  // барьер костей
@@ -314,58 +319,23 @@ void Combat::heroAct(int i, std::vector<std::string>& log) {
 
 void Combat::heroActInner(int i, std::vector<std::string>& log) {
     Hero& h = party_.heroes[i];
-    CombatAction act;
-    act.actorHero = true;
-    act.actor = i;
 
-    // --- лекари ---
-    if (h.role == Role::Cleric) {
-        int a = mostWoundedHero();
-        if (a >= 0 && party_.heroes[a].hp * 100 < party_.heroes[a].maxHp * 60) {
-            int gained = healHero(a, h.atk + 3);
-            act.kind = CombatAction::Heal;
-            act.hits.push_back({true, a, gained, true, false, false});
-            events_.push_back(act);
-            log.push_back(fmt("%s лечит %s (+%d)", h.name.c_str(), party_.heroes[a].name.c_str(), gained));
-            return;
-        }
-    }
-    if (h.role == Role::Druid) {
-        bool anyHurt = false;
-        for (auto& o : party_.heroes)
-            if (o.inFight() && o.hp * 100 < o.maxHp * 75) anyHurt = true;
-        if (anyHurt) {
-            // Цепное лечение: случайная цель +4, следующая +3, затем +2, +1 ... (все члены отряда),
-            // к каждой порции добавляется 50% защиты друида.
-            std::vector<int> targets;
-            for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j)
-                if (party_.heroes[j].inFight()) targets.push_back(j);
-            rng_.shuffle(targets);
-            act.kind = CombatAction::Heal;
-            const int bonus = h.def / 2;
-            for (size_t k = 0; k < targets.size(); ++k) {
-                const int amount = std::max(1, 4 - static_cast<int>(k)) + bonus;
-                const int gained = healHero(targets[k], amount);
-                if (gained > 0) act.hits.push_back({true, targets[k], gained, true, false, false});
-            }
-            events_.push_back(act);
-            log.push_back(fmt("%s: цепное лечение (%d целей)", h.name.c_str(), static_cast<int>(act.hits.size())));
-            return;
-        }
-    }
+    // Аура Берсерка действует на весь отряд, если он выбран в команде.
+    const bool berserkerInParty = std::any_of(party_.heroes.begin(), party_.heroes.end(),
+                                              [](const Hero& hero) { return hero.role == Role::Berserker; });
+    const int auraVamp = berserkerInParty ? kBerserkerAuraVampPct : 0;
 
-    // --- атака: цели по возрастанию здоровья ---
+    // Каждый герой сначала бьёт, а уже потом применяет своё умение.
     std::vector<int> order;
     for (int e = 0; e < static_cast<int>(enemies_.size()); ++e)
         if (enemies_[e].alive()) order.push_back(e);
     if (order.empty()) return;
     std::sort(order.begin(), order.end(), [&](int a, int b) { return enemies_[a].hp < enemies_[b].hp; });
 
-    std::vector<int> killed;
     int totalDmg = 0;
     const int critChance = std::min(75, (h.role == Role::Rogue ? 25 : 0) + h.critPct);
 
-    auto hit = [&](int ei, int atkValue, bool magic, bool ranged) {
+    auto hitInto = [&](CombatAction& out, std::vector<int>& killed, int ei, int atkValue, bool magic, bool ranged) {
         Enemy& e = enemies_[ei];
         int dmg = heroDamage(h, e, atkValue, magic, ranged);
         bool crit = critChance > 0 && rng_.range(1, 100) <= critChance;
@@ -373,7 +343,7 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
         e.hp -= dmg;
         totalDmg += dmg;
         const bool dead = !e.alive();
-        act.hits.push_back({false, ei, dmg, false, crit, dead, dead ? e.coins : 0});
+        out.hits.push_back({false, ei, dmg, false, crit, dead, dead ? e.coins : 0});
         log.push_back(fmt("%s > %s: -%d%s%s", h.name.c_str(), e.name.c_str(), dmg, crit ? " (крит!)" : "",
                           dead ? " - повержен" : ""));
         if (e.bossId == BossDevourer && e.boss && swallowed_ >= 0) {
@@ -382,64 +352,178 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
         }
         if (dead) killed.push_back(ei);
     };
+    auto aliveTargets = [&]() {
+        std::vector<int> out;
+        for (int e = 0; e < static_cast<int>(enemies_.size()); ++e)
+            if (enemies_[e].alive()) out.push_back(e);
+        std::sort(out.begin(), out.end(), [&](int a, int b) { return enemies_[a].hp < enemies_[b].hp; });
+        return out;
+    };
 
+    // --- атака ---
+    CombatAction act;
+    act.actorHero = true;
+    act.actor = i;
+    std::vector<int> killed;
     switch (h.role) {
         case Role::Mage:
             act.kind = CombatAction::Ranged;
-            hit(order[0], h.atk, true, true);
+            hitInto(act, killed, order[0], h.atk, true, true);
             break;
         case Role::Archer:
             act.kind = CombatAction::Ranged;
             for (size_t k = 0; k < order.size() && k < 2; ++k)
-                hit(order[k], order.size() == 1 ? h.atk : h.atk * 8 / 10, false, true);
+                hitInto(act, killed, order[k], order.size() == 1 ? h.atk : h.atk * 8 / 10, false, true);
             break;
-        case Role::Berserker: {
-            bool rage = h.hp * 2 < h.maxHp;
-            act.kind = CombatAction::Melee;
-            hit(order[0], h.atk * (rage ? 3 : 2) / 2, false, false);
-            break;
-        }
-        case Role::Bard: {
-            int best = -1;
-            for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j) {
-                if (j == i || !party_.heroes[j].inFight()) continue;
-                if (best < 0 || party_.heroes[j].atk > party_.heroes[best].atk) best = j;
-            }
-            if (best >= 0) {
-                const int bonus = std::max(1, h.atk / 2);
-                party_.heroes[best].buffAtkCombat += bonus;
-                party_.heroes[best].recalc();
-                act.kind = CombatAction::Effect;
-                act.hits.push_back({true, best, bonus, true, false, false});
-                events_.push_back(act);
-                log.push_back(fmt("%s вдохновляет %s: +%d АТК!", h.name.c_str(), party_.heroes[best].name.c_str(), bonus));
-                return;
-            }
-            act.kind = CombatAction::Effect;
-            break;
-        }
         default:
             act.kind = CombatAction::Melee;
-            hit(order[0], h.atk, false, false);
+            hitInto(act, killed, order[0], h.atk, false, false);
             break;
     }
     events_.push_back(act);
     afterHeroAction(killed, log);
 
-    // Вампиризм от реликвии.
-    if (h.lifestealPct > 0 && totalDmg > 0 && h.inFight()) {
-        int want = std::max(1, totalDmg * h.lifestealPct / 100);
+    // --- способности после атаки ---
+    std::vector<int> rageKilled;
+    if (h.role == Role::Berserker && h.hp * 2 < h.maxHp) {
+        // Ярость: дополнительный удар, когда здоровье ниже половины.
+        auto rest = aliveTargets();
+        if (!rest.empty()) {
+            CombatAction ra;
+            ra.kind = CombatAction::Melee;
+            ra.actorHero = true;
+            ra.actor = i;
+            hitInto(ra, rageKilled, rest[0], h.atk / 2, false, false);
+            events_.push_back(ra);
+            log.push_back(fmt("%s в ярости: дополнительный удар!", h.name.c_str()));
+        }
+    }
+    if (!rageKilled.empty()) afterHeroAction(rageKilled, log);
+
+    // Вампиризм: реликвии героя плюс аура Берсерка для всей группы.
+    const int stealPct = h.lifestealPct + auraVamp;
+    if (stealPct > 0 && totalDmg > 0 && h.inFight()) {
+        int want = std::max(1, totalDmg * stealPct / 100);
         int gained = healHero(i, want);
         if (gained > 0) {
             CombatAction ha;
             ha.kind = CombatAction::Effect;
+            ha.actorHero = true;
+            ha.actor = i;
             ha.hits.push_back({true, i, gained, true, false, false});
             events_.push_back(ha);
             log.push_back(fmt("%s: вампиризм +%d", h.name.c_str(), gained));
         }
     }
 
-    // Паладин после атаки лечит самого раненого союзника.
+    // Маг: после каждого 3-го удара накопленная магия выливается в арканный взрыв
+    // по всем живым врагам. Счётчик живёт внутри боя и не переносится между схватками.
+    if (h.role == Role::Mage && i < static_cast<int>(arcaneCharge_.size())) {
+        ++arcaneCharge_[i];
+        if (arcaneCharge_[i] >= 3) {
+            arcaneCharge_[i] = 0;
+            auto targets = aliveTargets();
+            if (!targets.empty()) {
+                std::vector<int> burstKilled;
+                CombatAction ea;
+                ea.kind = CombatAction::Ranged;
+                ea.actorHero = true;
+                ea.actor = i;
+                for (int ei : targets)
+                    hitInto(ea, burstKilled, ei, h.atk * 6 / 10, true, true);
+                events_.push_back(ea);
+                CombatAction sa;
+                sa.kind = CombatAction::Shout;
+                sa.actorHero = true;
+                sa.actor = i;
+                sa.text = "Арканный взрыв!";
+                events_.push_back(sa);
+                log.push_back(fmt("%s: арканный взрыв по %d целям!", h.name.c_str(), static_cast<int>(targets.size())));
+                afterHeroAction(burstKilled, log);
+            }
+        }
+    }
+
+    // Сейдмард: снимает до 6 ЗАЩ с самой защищённой цели (по 2 за применение).
+    // Когда снимать больше нечего, наносит дополнительный магический удар.
+    if (h.role == Role::Seidmard) {
+        int best = -1, bestDef = 0;
+        for (int ei = 0; ei < static_cast<int>(enemies_.size()); ++ei) {
+            const Enemy& e = enemies_[ei];
+            if (!e.alive() || e.defShred >= kRuneMax) continue;  // лимит рун исчерпан - пора бить
+            const int d = std::max(0, e.def - e.defShred);
+            if (d > bestDef) { bestDef = d; best = ei; }
+        }
+        if (best >= 0) {
+            Enemy& target = enemies_[best];
+            target.defShred = std::min(kRuneMax, target.defShred + kRuneStep);
+            CombatAction sa;
+            sa.kind = CombatAction::Shout;
+            sa.actorHero = false;
+            sa.actor = best;
+            sa.text = "Руна: -2 ЗАЩ";
+            events_.push_back(sa);
+            log.push_back(fmt("%s: руна ослабляет броню, ЗАЩ теперь %d", target.name.c_str(),
+                              std::max(0, target.def - target.defShred)));
+        } else {
+            int target = -1, mostArmored = -1;
+            for (int ei = 0; ei < static_cast<int>(enemies_.size()); ++ei) {
+                const Enemy& e = enemies_[ei];
+                if (!e.alive()) continue;
+                if (target < 0 || e.def > mostArmored) { target = ei; mostArmored = e.def; }
+            }
+            if (target >= 0) {
+                std::vector<int> runeKilled;
+                CombatAction ra;
+                ra.kind = CombatAction::Ranged;
+                ra.actorHero = true;
+                ra.actor = i;
+                hitInto(ra, runeKilled, target, h.atk / 2, true, true);
+                events_.push_back(ra);
+                log.push_back(fmt("%s: руна исчерпана - дополнительный магический удар!", h.name.c_str()));
+                afterHeroAction(runeKilled, log);
+            }
+        }
+    }
+
+    if (h.role == Role::Cleric) {
+        int a = mostWoundedHero();
+        if (a >= 0 && party_.heroes[a].hp * 100 < party_.heroes[a].maxHp * 60) {
+            int gained = healHero(a, h.atk + 3);
+            CombatAction ha;
+            ha.kind = CombatAction::Heal;
+            ha.actorHero = true;
+            ha.actor = i;
+            ha.hits.push_back({true, a, gained, true, false, false});
+            events_.push_back(ha);
+            log.push_back(fmt("%s лечит %s (+%d)", h.name.c_str(), party_.heroes[a].name.c_str(), gained));
+        }
+    }
+    if (h.role == Role::Druid) {
+        bool anyHurt = false;
+        for (auto& o : party_.heroes)
+            if (o.inFight() && o.hp * 100 < o.maxHp * 85) anyHurt = true;
+        if (anyHurt) {
+            // Усиленное цепное лечение: 6/5/4/3... по всем живым союзникам,
+            // к каждой порции добавляется половина защиты друида.
+            std::vector<int> targets;
+            for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j)
+                if (party_.heroes[j].inFight()) targets.push_back(j);
+            rng_.shuffle(targets);
+            CombatAction ha;
+            ha.kind = CombatAction::Heal;
+            ha.actorHero = true;
+            ha.actor = i;
+            const int bonus = h.def / 2;
+            for (size_t k = 0; k < targets.size(); ++k) {
+                const int amount = std::max(1, 6 - static_cast<int>(k)) + bonus;
+                const int gained = healHero(targets[k], amount);
+                if (gained > 0) ha.hits.push_back({true, targets[k], gained, true, false, false});
+            }
+            events_.push_back(ha);
+            log.push_back(fmt("%s: цепное лечение (%d целей)", h.name.c_str(), static_cast<int>(ha.hits.size())));
+        }
+    }
     if (h.role == Role::Paladin) {
         int a = mostWoundedHero();
         if (a >= 0 && party_.heroes[a].hp < party_.heroes[a].maxHp) {
@@ -454,6 +538,34 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
                 log.push_back(fmt("%s лечит %s (+%d)", h.name.c_str(), party_.heroes[a].name.c_str(), gained));
             }
         }
+    }
+    if (h.role == Role::Bard) {
+        int best = -1;
+        for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j) {
+            if (j == i || !party_.heroes[j].inFight()) continue;
+            if (best < 0 || party_.heroes[j].atk > party_.heroes[best].atk) best = j;
+        }
+        if (best >= 0) {
+            const int bonus = std::max(1, h.atk / 2);
+            party_.heroes[best].buffAtkCombat += bonus;
+            party_.heroes[best].recalc();
+            CombatAction ha;
+            ha.kind = CombatAction::Effect;
+            ha.actorHero = true;
+            ha.actor = i;
+            ha.hits.push_back({true, best, bonus, true, false, false});
+            events_.push_back(ha);
+            log.push_back(fmt("%s вдохновляет %s: +%d АТК!", h.name.c_str(), party_.heroes[best].name.c_str(), bonus));
+        }
+    }
+    if (h.role == Role::Warrior) {
+        CombatAction ha;
+        ha.kind = CombatAction::Shout;
+        ha.actorHero = true;
+        ha.actor = i;
+        ha.text = "Провокация!";
+        events_.push_back(ha);
+        log.push_back(fmt("%s: Провокация!", h.name.c_str()));
     }
 }
 
@@ -683,7 +795,9 @@ std::string Combat::status() const {
         }
         case BossKnight: {
             int k = findBoss(BossKnight);
-            return fmt("Броня ЗАЩ %d: магия Мага её игнорирует", k >= 0 ? enemies_[k].def : 0);
+            if (k < 0) return "";
+            const int def = std::max(0, enemies_[k].def - enemies_[k].defShred);
+            return fmt("Броня ЗАЩ %d (руны: -%d): магия Мага её игнорирует", def, enemies_[k].defShred);
         }
         case BossArchmage: return "Метит в самого раненого героя";
         case BossDruid:    return "Друид крадёт 50% лечения отряда";

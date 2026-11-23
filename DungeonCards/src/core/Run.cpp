@@ -389,6 +389,25 @@ bool Run::buy(int idx) {
     return true;
 }
 
+bool Run::sellItem(int bagIndex) {
+    if (!canManage() || !inShopRoom()) return false;
+    if (bagIndex < 0 || bagIndex >= static_cast<int>(party_.bag.size())) return false;
+    const Item item = party_.bag[bagIndex];
+    const int price = itemSellPrice(item);
+    party_.bag.erase(party_.bag.begin() + bagIndex);
+    party_.coins += price;
+    say(fmt("Продано: %s за %d", item.name.c_str(), price));
+    return true;
+}
+
+bool Run::restockShop() {
+    if (phase_ != RunPhase::Shop || !inShopRoom() || party_.coins < kShopRestockCost) return false;
+    party_.coins -= kShopRestockCost;
+    stocks_[pos_] = makeShopStock(rng_, 5, meta_.shopDiscountPct());
+    say(fmt("Торговец обновил ассортимент за %d монет.", kShopRestockCost));
+    return true;
+}
+
 void Run::leaveShop() {
     if (phase_ == RunPhase::Shop) phase_ = RunPhase::Exploring;
 }
@@ -402,6 +421,7 @@ int Run::restHealPct() const {
 }
 bool Run::hasLivingArcher() const { return party_.findAlive(Role::Archer) != nullptr; }
 bool Run::hasLivingBard() const { return party_.findAlive(Role::Bard) != nullptr; }
+bool Run::hasLivingSeidmard() const { return party_.findAlive(Role::Seidmard) != nullptr; }
 bool Run::canRestRevive() const {
     for (const auto& h : party_.heroes)
         if (!h.alive()) return true;
@@ -445,7 +465,13 @@ int Run::reviveArtifactCost() const {
     const int missing = 100 - reviveChancePct();
     return (kReviveArtifactCost * missing + 99) / 100;
 }
-int Run::forgePrice(const Item& it) const { if (it.tier>=4 || it.kind==ItemKind::Potion) return 0; Item n=it; ++n.tier; return itemPrice(n)*60/100; }
+int Run::forgePrice(const Item& it) const {
+    if (it.tier >= 4 || it.kind == ItemKind::Potion) return 0;
+    Item n = it;
+    ++n.tier;
+    const int base = itemPrice(n) * 60 / 100;
+    return hasLivingSeidmard() ? base * 80 / 100 : base;  // руны Сейдмарда: скидка кузницы 20%
+}
 bool Run::forgeUpgrade(int i) {
     if (phase_!=RunPhase::ForgeChoice || i<0 || i>=(int)party_.bag.size()) return false;
     const Item old=party_.bag[i]; if(old.tier>=4 || old.kind==ItemKind::Potion) return false;

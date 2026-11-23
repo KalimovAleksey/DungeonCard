@@ -31,11 +31,12 @@ public:
     void run();
 
 private:
-    enum class Screen { MainMenu, Select, Build, Run, Result, Pause, Settings, Achievements, Legacy };
+    enum class Screen { MainMenu, Select, Build, Run, Result, Pause, Settings, Achievements, Legacy, Guide };
     struct Settings {
         int width = 1280;
         int height = 720;
         bool fullscreen = false;
+        bool customResolution = false;  // пользователь сам выбрал размер окна
     };
     struct Resolution {
         int w, h;
@@ -75,7 +76,7 @@ private:
         bool heal = false;
     };
 
-    static constexpr int kMaxRoster = 9;
+    static constexpr int kMaxRoster = 10;
     static constexpr int kPartySize = 4;
     static constexpr int kHand = 4;
     static constexpr int kMaxPlacements = 12;
@@ -101,8 +102,10 @@ private:
     void recordRunResult();         // итог забега -> артефакты и достижения
     void updateAchievements();
     void updateLegacy();
+    void updateGuide();
     void drawAchievements();
     void drawLegacy();
+    void drawGuide();
     void drawArtifact(float cx, float cy, float radius) const;
 
     // меню и настройки
@@ -110,7 +113,9 @@ private:
     void saveSettings() const;
     void buildResolutionList();
     void applyDisplay();
-    void viewTransform(float& scale, float& offX, float& offY) const;
+    void syncRenderTarget();           // пересоздаёт буфер под текущий размер окна
+    void viewTransform(float& scaleX, float& scaleY, float& offX, float& offY) const;
+    void beginScissor(int x, int y, int w, int h) const;  // область обрезки в логических координатах
     Vector2 mouse() const;          // положение мыши в логических координатах 1280x720
     void updateMainMenu();
     void updatePause();
@@ -158,6 +163,7 @@ private:
     void drawBar(int x, int y, int w, int h, float ratio, Color fill) const;
     void drawSprite(Vector2 c, int size, Color col, const std::string& name, int hp, int maxHp, Flash fl,
                     Vector2 offset, const std::string& tag, const std::string& art, const std::string& art2) const;
+    void drawDebuffRunes(const Enemy& e, Vector2 c, int size) const;  // стаки рун Сейдмарда рядом с врагом
 
     // картинки: если файл есть в assets/, рисуется он, иначе встроенный шаблон
     const Texture2D* tex(const std::string& rel) const;
@@ -218,6 +224,8 @@ private:
     float achScroll_ = 0.f;
     std::vector<Resolution> resolutions_;
     RenderTexture2D target_{};
+    int targetW_ = 0, targetH_ = 0;   // размер буфера в физических пикселях окна
+    float targetScale_ = 1.f;
     bool quit_ = false;
     Screen prevScreen_ = Screen::MainMenu;     // куда вернуться из паузы
     Screen settingsBack_ = Screen::MainMenu;   // куда вернуться из настроек

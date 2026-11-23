@@ -11,6 +11,7 @@ namespace dc {
 struct Enemy {
     std::string name;
     int hp = 1, maxHp = 1, atk = 1, def = 0, spd = 1;
+    int defShred = 0;    // руны Сейдмарда: временное снижение ЗАЩ на время боя
     int bossId = -1;     // >= 0: босс или его порождение
     bool boss = false;   // главный босс
     bool minion = false; // призванный скелет
@@ -111,6 +112,7 @@ private:
     int slotCount_ = 1;
     int dmgReducePct_ = 0;
     EnemyScale scale_;
+    std::vector<int> arcaneCharge_;  // счётчик ходов Мага до «Арканного взрыва»
 
     // механики боссов
     int swallowed_ = -1;       // индекс проглоченного героя

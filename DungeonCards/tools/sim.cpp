@@ -12,20 +12,20 @@
 
 using namespace dc;
 
-// индексы в heroRoster(): 0 Воин, 1 Маг, 2 Жрица, 3 Вор, 4 Лучник, 5 Паладин, 6 Берсерк, 7 Друид, 8 Бард
-static constexpr int kClassCount = static_cast<int>(Role::Bard) + 1;
+// индексы в heroRoster(): 0 Воин, 1 Маг, 2 Жрица, 3 Вор, 4 Лучник, 5 Паладин, 6 Берсерк, 7 Друид, 8 Бард, 9 Сейдмард
+static constexpr int kClassCount = static_cast<int>(Role::Seidmard) + 1;
 static std::vector<int> smartTeam(int boss) {
-    // пересчитано перебором всех 126 составов из 9 героев (balance_sim ... search, 80 партий на состав)
+    // пересчитано перебором составов из 10 героев (balance_sim ... search, умные предметы)
     // для Слизня и Некроманта учтён бонус Лучника против призывов
     switch (boss) {
-        case BossSlime:    return {0, 2, 4, 7};  // Воин Жрица Лучник Друид
-        case BossDevourer: return {0, 2, 5, 7};  // Воин Жрица Паладин Друид
-        case BossKnight:   return {2, 3, 5, 7};  // Жрица Вор Паладин Друид
-        case BossArchmage: return {3, 5, 7, 8};  // Вор Паладин Друид Бард
-        case BossDruid:    return {3, 5, 7, 8};  // Вор Паладин Друид Бард
-        case BossTroll:    return {0, 2, 6, 8};  // Воин Жрица Берсерк Бард
-        case BossNecro:    return {2, 3, 4, 5};  // Жрица Вор Лучник Паладин
-        default:           return {1, 2, 3, 7};  // дракон: Маг Жрица Вор Друид
+        case BossSlime:    return {0, 2, 4, 9};  // Воин Жрица Лучник Сейдмард
+        case BossDevourer: return {0, 1, 5, 7};  // Воин Маг Паладин Друид
+        case BossKnight:   return {0, 2, 6, 9};  // Воин Жрица Берсерк Сейдмард (антиброня)
+        case BossArchmage: return {0, 1, 4, 6};  // Воин Маг Лучник Берсерк
+        case BossDruid:    return {0, 1, 2, 9};  // Воин Маг Жрица Сейдмард
+        case BossTroll:    return {0, 2, 6, 7};  // Воин Жрица Берсерк Друид
+        case BossNecro:    return {0, 1, 4, 7};  // Воин Маг Лучник Друид
+        default:           return {0, 1, 2, 7};  // дракон: Воин Маг Жрица Друид
     }
 }
 
@@ -37,6 +37,7 @@ static double weight(const Hero& h, const Item& it) {
             switch (r) {
                 case Role::Mage: case Role::Berserker: case Role::Rogue: return 3;
                 case Role::Archer: return 2.8;
+                case Role::Seidmard: return 2.5;
                 case Role::Warrior: return 2;
                 case Role::Paladin: return 1.5;
                 case Role::Cleric: return 0.6;
@@ -51,7 +52,7 @@ static double weight(const Hero& h, const Item& it) {
                 case RelicEffect::Haste:    return isHealer(r) ? 2 : 1;
                 case RelicEffect::Keen:
                     return (r == Role::Rogue) ? 3 : (r == Role::Mage || r == Role::Archer || r == Role::Berserker) ? 2.5
-                           : r == Role::Warrior ? 1.5 : 0.8;
+                           : r == Role::Warrior ? 1.5 : r == Role::Seidmard ? 2 : 0.8;
                 case RelicEffect::Vampire:
                     return (r == Role::Berserker || r == Role::Warrior) ? 3 : r == Role::Paladin ? 2.5 : r == Role::Rogue ? 2 : 1;
             }
@@ -338,8 +339,8 @@ static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems,
 static bool bossHasAdds(int boss) { return boss == BossNecro || boss == BossSlime; }
 static constexpr double kArcherAddsBonus = 10.0;
 
-// Перебор всех C(9,4) = 126 составов отряда для каждого босса (умная раздача предметов).
-static void searchTeams(int games, int policy) {
+// Перебор всех C(10,4) = 210 составов отряда для каждого босса (умная раздача предметов).
+static void searchTeams(int games, int policy, int requireRole = -1) {
     auto roster = heroRoster();
     for (int boss = 0; boss < kBossCount; ++boss) {
         double best = -1, bestRaw = 0, worst = 101, sum = 0;
@@ -350,6 +351,7 @@ static void searchTeams(int games, int policy) {
                 for (int c = b + 1; c < kClassCount; ++c)
                     for (int d = c + 1; d < kClassCount; ++d) {
                         std::vector<int> team = {a, b, c, d};
+                        if (requireRole >= 0 && std::find(team.begin(), team.end(), requireRole) == team.end()) continue;
                         int w = 0, p = 0;
                         for (int g = 0; g < games; ++g) {
                             Result r = playOne(g * 8 + boss, boss, false, true, policy, &team);
@@ -400,10 +402,13 @@ int main(int argc, char** argv) {
     dc::enableUtf8Console();
     int games = argc > 1 ? std::atoi(argv[1]) : 1600;
     int policy = argc > 2 ? std::atoi(argv[2]) : 0;
-    if (argc > 3 && std::string(argv[3]) == "search") { searchTeams(games, policy); return 0; }
+    if (argc > 3 && std::string(argv[3]) == "search")
+    { searchTeams(games, policy, argc > 4 ? std::atoi(argv[4]) : -1); return 0; }
     if (argc > 3 && std::string(argv[3]) == "impact") { metaImpact(games, policy); return 0; }
+    // «smart» — только умный отряд + умная раздача (без наивных режимов), быстрый прогон баланса
+    const bool smartOnly = argc > 3 && std::string(argv[3]) == "smart";
     // argv[4]: прокачка «Наследия»: 0 - нет, 1 - половина уровней, 2 - максимум
-    const int metaMode = argc > 4 ? std::atoi(argv[4]) : (argc > 3 ? std::atoi(argv[3]) : 0);
+    const int metaMode = argc > 4 ? std::atoi(argv[4]) : (argc > 3 && !smartOnly ? std::atoi(argv[3]) : 0);
     Meta metaCfg;
     for (int u = 0; u < kUpgradeCount; ++u)
         metaCfg.level[u] = metaMode == 0 ? 0 : metaMode == 1 ? (upgradeInfo(u).maxLevel + 1) / 2 : upgradeInfo(u).maxLevel;
@@ -427,7 +432,7 @@ int main(int argc, char** argv) {
     int classPlayed[4][kClassCount] = {};
     int classWins[4][kClassCount] = {};
     int classSurvived[4][kClassCount] = {};
-    for (int c = 0; c < 4; ++c)
+    for (int c = smartOnly ? 3 : 0; c < 4; ++c)
         for (int g = 0; g < games; ++g) {
             int boss = g % kBossCount;
             Result r = playOne(g, boss, cfgs[c].team, cfgs[c].items, policy, nullptr, metaPtr);
@@ -445,33 +450,54 @@ int main(int argc, char** argv) {
                 if (r.survived[i]) ++classSurvived[c][cls];
             }
         }
-    for (int c = 0; c < 4; ++c) {
+    for (int c = smartOnly ? 3 : 0; c < 4; ++c) {
         int w = 0, p = 0;
         for (int b = 0; b < kBossCount; ++b) { w += wins[c][b]; p += played[c][b]; }
         std::printf("%s  победы: %5.1f%%  дошли до босса: %5.1f%%  торговец подключён: %4.1f%%\n", cfgs[c].name, 100.0 * w / std::max(1, p), 100.0 * reach[c] / std::max(1, p), 100.0 * shopSeen[c] / std::max(1, shopPlayed[c]));
     }
-    std::printf("\nПо боссам (наивно / умно):\n");
-    for (int b = 0; b < kBossCount; ++b)
-        std::printf("  %-18s %5.1f%% / %5.1f%%\n", bossInfo(b).name.c_str(),
-                    100.0 * wins[0][b] / std::max(1, played[0][b]), 100.0 * wins[3][b] / std::max(1, played[3][b]));
+    if (smartOnly) {
+        std::printf("\nПо боссам (умный отряд + умные предметы):\n");
+        for (int b = 0; b < kBossCount; ++b)
+            std::printf("  %-18s %5.1f%%\n", bossInfo(b).name.c_str(),
+                        100.0 * wins[3][b] / std::max(1, played[3][b]));
+    } else {
+        std::printf("\nПо боссам (наивно / умно):\n");
+        for (int b = 0; b < kBossCount; ++b)
+            std::printf("  %-18s %5.1f%% / %5.1f%%\n", bossInfo(b).name.c_str(),
+                        100.0 * wins[0][b] / std::max(1, played[0][b]), 100.0 * wins[3][b] / std::max(1, played[3][b]));
+    }
 
     const auto roster = heroRoster();
     std::printf("\nПо классам (победы / выжил, %% от забегов с этим классом в отряде):\n");
-    const char* heads[5] = {"класс", "наивная", "отряд под босса", "умные предметы", "всё умное"};
-    for (int i = 0; i < 5; ++i) std::printf("  %s", padUtf8(heads[i], i == 0 ? 10 : 16).c_str());
-    std::printf("\n");
+    struct Row { int cls; double rate[4]; };
+    std::vector<Row> rows;
     for (int cls = 0; cls < kClassCount && cls < static_cast<int>(roster.size()); ++cls) {
-        std::printf("  %s", padUtf8(roster[cls].name, 10).c_str());
-        for (int c = 0; c < 4; ++c) {
-            const int p = classPlayed[c][cls];
-            char cell[32];
-            if (p == 0)
-                std::snprintf(cell, sizeof(cell), "-");
-            else
-                std::snprintf(cell, sizeof(cell), "%4.1f%% / %4.1f%%",
-                              100.0 * classWins[c][cls] / p, 100.0 * classSurvived[c][cls] / p);
-            std::printf("  %s", padUtf8(cell, 16).c_str());
-        }
+        Row row{cls, {-1, -1, -1, -1}};
+        for (int c = 0; c < 4; ++c)
+            if (classPlayed[c][cls] > 0) row.rate[c] = 100.0 * classWins[c][cls] / classPlayed[c][cls];
+        rows.push_back(row);
+    }
+    std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.rate[3] > b.rate[3]; });
+    auto cell = [&](int c, int cls) {
+        if (classPlayed[c][cls] == 0) return std::string("-");
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%4.1f%% / %4.1f%%",
+                      100.0 * classWins[c][cls] / classPlayed[c][cls],
+                      100.0 * classSurvived[c][cls] / classPlayed[c][cls]);
+        return std::string(buf);
+    };
+    if (smartOnly) {
+        std::printf("  %s\n", padUtf8("класс", 10).c_str());
+        for (const auto& row : rows)
+            std::printf("  %s  %s\n", padUtf8(roster[row.cls].name, 10).c_str(), cell(3, row.cls).c_str());
+    } else {
+        const char* heads[5] = {"класс", "наивная", "отряд под босса", "умные предметы", "всё умное"};
+        for (int i = 0; i < 5; ++i) std::printf("  %s", padUtf8(heads[i], i == 0 ? 10 : 16).c_str());
         std::printf("\n");
+        for (const auto& row : rows) {
+            std::printf("  %s", padUtf8(roster[row.cls].name, 10).c_str());
+            for (int c = 0; c < 4; ++c) std::printf("  %s", padUtf8(cell(c, row.cls), 16).c_str());
+            std::printf("\n");
+        }
     }
 }

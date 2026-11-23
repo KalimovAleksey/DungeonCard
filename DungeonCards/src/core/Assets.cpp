@@ -13,6 +13,7 @@ const char* roleKey(Role r) {
         case Role::Berserker: return "berserker";
         case Role::Druid:     return "druid";
         case Role::Bard:      return "bard";
+        case Role::Seidmard:  return "seidmard";
     }
     return "hero";
 }
@@ -60,10 +61,11 @@ std::vector<AssetSpec> assetManifest() {
     };
 
     // герои: бой, выбор отряда, привал, инвентарь
-    const Role roles[8] = {Role::Warrior, Role::Mage, Role::Cleric, Role::Rogue,
-                           Role::Archer, Role::Paladin, Role::Berserker, Role::Druid};
-    const char* roleNames[8] = {"Воин", "Маг", "Жрица", "Вор", "Лучник", "Паладин", "Берсерк", "Друид"};
-    for (int i = 0; i < 8; ++i)
+    const Role roles[10] = {Role::Warrior, Role::Mage, Role::Cleric, Role::Rogue,
+                            Role::Archer, Role::Paladin, Role::Berserker, Role::Druid,
+                            Role::Bard, Role::Seidmard};
+    const char* roleNames[10] = {"Воин", "Маг", "Жрица", "Вор", "Лучник", "Паладин", "Берсерк", "Друид", "Бард", "Сейдмард"};
+    for (int i = 0; i < 10; ++i)
         add(heroArt(roles[i]), 128, 128, "Герои", std::string("Герой: ") + roleNames[i] + ". Лицом вправо (к врагам)");
 
     // боссы

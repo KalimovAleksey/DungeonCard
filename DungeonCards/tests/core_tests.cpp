@@ -1,6 +1,6 @@
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
-#include <cstdio>
 #include <set>
 #include "core/Assets.h"
 #include "core/ConsoleUtf8.h"
@@ -333,6 +333,209 @@ int main() {
         CHECK(three.size() == 2);                                         // больше двух не бьёт
     }
 
+    // --------------------------------------------- новые классы и их умения
+    {
+        const auto roster = heroRoster();
+        CHECK(roster.size() == 10);
+        CHECK(roster.back().role == Role::Seidmard && roster.back().name == "Сейдмард");
+
+        // Сейдмард: снимает по 2 ЗАЩ за свой ход, до 6, затем бьёт магией
+        {
+            Rng rr(5);
+            Party p;
+            Hero r = tough("Сейдмард", Role::Seidmard, 8);
+            r.baseSpd = r.spd = 9;
+            p.heroes = {r};
+            Enemy e;
+            e.name = "Броня"; e.maxHp = e.hp = 100000; e.atk = 1; e.def = 6; e.spd = 1;
+            Combat cb(p, {e}, rr);
+            std::vector<std::string> lg;
+            std::vector<int> shred;
+            int shouts = 0, extras = 0;
+            for (int turn = 1; turn <= 8; ++turn) {  // 4 раунда: герой ходит перед врагом
+                cb.step(lg);
+                shred.push_back(cb.enemies()[0].defShred);
+                if (turn % 2 == 1) {
+                    if (turn <= 5) {
+                        CHECK(!cb.events().empty() && cb.events().back().kind == CombatAction::Shout);
+                        CHECK(cb.events().back().text == "Руна: -2 ЗАЩ");
+                        ++shouts;
+                    } else {
+                        for (const auto& a : cb.events())
+                            if (a.kind == CombatAction::Ranged && !a.hits.empty()) ++extras;
+                    }
+                }
+            }
+            CHECK((shred == std::vector<int>{2, 2, 4, 4, 6, 6, 6, 6}));
+            CHECK(shouts == 3);
+            CHECK(extras == 1);  // когда ЗАЩ снята - дополнительный магический удар
+        }
+        // Снятая рунами ЗАЩ помогает всему отряду
+        {
+            Rng rr(6);
+            Party p;
+            Hero r = tough("Сейдмард", Role::Seidmard, 8);
+            r.baseSpd = r.spd = 9;
+            Hero w = tough("Воин", Role::Warrior, 8);
+            w.baseSpd = w.spd = 8;
+            p.heroes = {r, w};
+            Enemy e;
+            e.name = "Рыцарь"; e.maxHp = e.hp = 100000; e.atk = 1; e.def = 11; e.spd = 1;
+            Combat cb(p, {e}, rr);
+            std::vector<std::string> lg;
+            int first = 0, late = 0;
+            for (int turn = 1; turn <= 8; ++turn) {  // 3 раунда: рунист, воин, враг
+                cb.step(lg);
+                int mx = 0;
+                for (const auto& a : cb.events())
+                    for (const auto& h : a.hits)
+                        if (!h.targetHero && !h.heal) mx = std::max(mx, h.amount);
+                if (turn == 2) first = mx;
+                if (turn == 8) late = mx;
+            }
+            CHECK(first == 2);    // 11 ЗАЩ: проходит минимум 25% АТК
+            CHECK(late > first);  // после трёх рун ЗАЩ 5, урон больше
+        }
+        // Маг: на 3-й ход после атаки - арканный взрыв по всем врагам, счётчик не переносится в новый бой
+        {
+            Rng rr(7);
+            Party p;
+            Hero m = tough("Маг", Role::Mage, 8);
+            m.baseSpd = m.spd = 9;
+            p.heroes = {m};
+            auto mk = []() {
+                Enemy e;
+                e.name = "Цель"; e.maxHp = e.hp = 100000; e.atk = 1; e.def = 0; e.spd = 1;
+                return e;
+            };
+            Combat cb(p, {mk(), mk()}, rr);
+            std::vector<std::string> lg;
+            for (int turn = 1; turn <= 7; ++turn) {  // 3 хода мага + все враги
+                cb.step(lg);
+                if (turn != 1 && turn != 4 && turn != 7) continue;
+                if (turn < 7) {
+                    CHECK(cb.events().size() == 1);
+                    CHECK(cb.events()[0].hits.size() == 1);
+                } else {
+                    bool burst = false, shout = false;
+                    for (const auto& a : cb.events()) {
+                        if (a.kind == CombatAction::Ranged && a.hits.size() == 2) burst = true;
+                        if (a.kind == CombatAction::Shout && a.text == "Арканный взрыв!") shout = true;
+                    }
+                    CHECK(burst && shout);
+                }
+            }
+            Combat fresh(p, {mk(), mk()}, rr);
+            fresh.step(lg);
+            CHECK(fresh.events().size() == 1);
+            CHECK(fresh.events()[0].hits.size() == 1);
+        }
+
+        // Сейдмард даёт скидку 20% в кузнице, пока жив
+        {
+            Dungeon d;
+            const Item it = gear(ItemKind::Weapon, 1, 5);
+            auto priceWith = [&](bool withSeidmard) {
+                std::vector<Hero> squad = {tough("Воин", Role::Warrior, 8)};
+                if (withSeidmard) squad.push_back(tough("Сейдмард", Role::Seidmard, 8));
+                Run r(d, 5, squad);
+                return r.forgePrice(it);
+            };
+            const int plain = priceWith(false), discounted = priceWith(true);
+            CHECK(plain > 0);
+            CHECK(discounted == plain * 80 / 100);   // 60% от цены upgraded тира, затем −20%
+
+            Dungeon d2;
+            std::vector<Hero> squad = {tough("Воин", Role::Warrior, 8), tough("Сейдмард", Role::Seidmard, 8)};
+            squad[1].hp = 0;
+            Run dead(d2, 5, squad);
+            CHECK(!dead.hasLivingSeidmard());
+            CHECK(dead.forgePrice(it) == plain);     // погибший скидку не даёт
+        }
+    }
+
+    // ----------------------------- каждый герой бьёт, затем применяет умение
+    {
+        auto dummyEnemy = []() {
+            Enemy e;
+            e.name = "Мишень"; e.maxHp = e.hp = 100000; e.atk = 1; e.def = 0; e.spd = 1;
+            return e;
+        };
+        auto firstStep = [&](std::vector<Hero> squad) {
+            Rng rr(1);
+            Party p;
+            p.heroes = std::move(squad);
+            Combat cb(p, {dummyEnemy()}, rr);
+            std::vector<std::string> lg;
+            cb.step(lg);
+            return cb.events();
+        };
+
+        {   // жрица: удар -> лечение
+            Hero cleric = tough("Жрица", Role::Cleric, 10);
+            cleric.baseSpd = cleric.spd = 9;
+            Hero ally = tough("Союзник", Role::Warrior, 8);
+            ally.hp = 50;
+            auto ev = firstStep({cleric, ally});
+            CHECK(ev.size() >= 2);
+            if (ev.size() >= 2) {
+                CHECK(!ev[0].hits.empty() && !ev[0].hits[0].heal && !ev[0].hits[0].targetHero);
+                CHECK(ev[1].kind == CombatAction::Heal && !ev[1].hits.empty() && ev[1].hits[0].heal);
+            }
+        }
+        {   // бард: удар -> вдохновение
+            Hero bard = tough("Бард", Role::Bard, 10);
+            bard.baseSpd = bard.spd = 9;
+            Hero ally = tough("Воин", Role::Warrior, 20);
+            auto ev = firstStep({bard, ally});
+            CHECK(ev.size() >= 2);
+            if (ev.size() >= 2) {
+                CHECK(!ev[0].hits.empty() && !ev[0].hits[0].heal);
+                CHECK(ev[1].kind == CombatAction::Effect && !ev[1].hits.empty() && ev[1].hits[0].heal);
+                CHECK(ev[1].hits[0].idx == 1 && ev[1].hits[0].amount == 5);  // +атк/2 союзнику после удара
+            }
+        }
+        {   // берсерк: удар -> ярость (доп. удар) -> вампиризм
+            Hero z = tough("Берсерк", Role::Berserker, 10);
+            z.baseSpd = z.spd = 9;
+            z.hp = 400;                                         // ниже половины от 900
+            auto ev = firstStep({z});
+            CHECK(ev.size() >= 3);
+            if (ev.size() >= 3) {
+                CHECK(!ev[0].hits.empty() && !ev[0].hits[0].heal && ev[0].hits[0].amount == 10);
+                CHECK(!ev[1].hits.empty() && !ev[1].hits[0].heal && ev[1].hits[0].amount == 5);
+                CHECK(ev[2].kind == CombatAction::Effect && !ev[2].hits.empty() && ev[2].hits[0].heal);
+                CHECK(ev[2].hits[0].amount == 1);               // 10% ауры от 15 урона
+            }
+        }
+        {   // воин: удар -> провокация
+            Hero w = tough("Воин", Role::Warrior, 8);
+            w.baseSpd = w.spd = 9;
+            auto ev = firstStep({w});
+            CHECK(ev.size() >= 2);
+            if (ev.size() >= 2) {
+                CHECK(!ev[0].hits.empty() && !ev[0].hits[0].heal);
+                CHECK(ev[1].kind == CombatAction::Shout && ev[1].text == "Провокация!");
+            }
+        }
+        {   // друид: удар -> усиленное цепное лечение
+            Hero d = tough("Друид", Role::Druid, 4);
+            d.baseSpd = d.spd = 9;
+            d.hp = 500;
+            Hero ally = tough("Союзник", Role::Warrior, 8);
+            ally.hp = 500;
+            auto ev = firstStep({d, ally});
+            CHECK(ev.size() >= 2);
+            if (ev.size() >= 2) {
+                CHECK(!ev[0].hits.empty() && !ev[0].hits[0].heal && !ev[0].hits[0].targetHero);
+                CHECK(ev[1].kind == CombatAction::Heal);
+                int healed = 0;
+                for (auto& h : ev[1].hits) if (h.heal) healed += h.amount;
+                CHECK(healed >= 9);                             // 6 + 5 по двум целям
+            }
+        }
+    }
+
     // ------------------------------------------ масштабирование врагов по этажам
     {
         CHECK(enemyScaleForFloor(1).hpPct == 100);
@@ -379,7 +582,7 @@ int main() {
             const int bonus = bonusDef / 2;
             CHECK(amounts.size() == 4);                                   // все четверо членов отряда
             if (amounts.size() == 4) {
-                CHECK(amounts[0] == 4 + bonus && amounts[1] == 3 + bonus && amounts[2] == 2 + bonus && amounts[3] == 1 + bonus);
+                CHECK(amounts[0] == 6 + bonus && amounts[1] == 5 + bonus && amounts[2] == 4 + bonus && amounts[3] == 3 + bonus);
                 std::set<int> uniq(targets.begin(), targets.end());
                 CHECK(uniq.size() == 4);                                  // каждая цель по разу
             }
@@ -556,6 +759,49 @@ int main() {
         CHECK(lifesteal);
     }
 
+    // --------------------------- аура вампиризма Берсерка действует на отряд
+    {
+        auto dummy = []() {
+            Enemy e;
+            e.name = "Мишень"; e.maxHp = e.hp = 100000; e.atk = 1; e.def = 0; e.spd = 1;
+            return e;
+        };
+        auto collect = [&](bool withBerserker) {
+            Rng rr(3);
+            Party p;
+            p.heroes.clear();
+            Hero w = tough("Воин", Role::Warrior, 8);
+            w.baseSpd = w.spd = 9;
+            w.hp = 800;                                     // есть куда лечиться
+            p.heroes.push_back(w);
+            if (withBerserker) {
+                Hero z = tough("Берсерк", Role::Berserker, 8);
+                z.baseSpd = z.spd = 8;
+                z.hp = 800;
+                p.heroes.push_back(z);
+            }
+            Combat cb(p, {dummy()}, rr);
+            std::vector<std::string> lg;
+            std::vector<CombatAction> all;
+            for (int s = 0; s < static_cast<int>(p.heroes.size()); ++s) {
+                cb.step(lg);
+                for (auto& a : cb.events()) all.push_back(a);
+            }
+            return all;
+        };
+        auto healed = [](const std::vector<CombatAction>& ev, int idx) {
+            for (const auto& a : ev)
+                for (const auto& h : a.hits)
+                    if (a.kind == CombatAction::Effect && h.heal && h.targetHero && h.idx == idx) return true;
+            return false;
+        };
+        const auto with = collect(true);
+        CHECK(healed(with, 0));                             // воин лечится от ауры
+        CHECK(healed(with, 1));                             // и сам берсерк тоже
+        const auto without = collect(false);
+        CHECK(!healed(without, 0));                         // без берсерка вампиризма нет
+    }
+
     // ------------------------------------------------------- торговец и монеты
     {
         // ассортимент: цены, без т4, т3 - редкость, т1 - самые частые
@@ -606,6 +852,29 @@ int main() {
         CHECK(r.move(East));                          // повторный заход открывает те же лоты
         CHECK(r.phase() == RunPhase::Shop);
         CHECK((*r.shopStock())[0].sold);
+    }
+    {   // продажа за полцены и обновление ассортимента
+        Dungeon d;
+        d.place(card(RoomType::Shop, 0, doorBit(West) | doorBit(East)), {s.x + 1, s.y});
+        Run r(d, 12);
+        CHECK(r.move(East));
+        CHECK(r.phase() == RunPhase::Shop);
+        const Item potion = makePotion(2);
+        const int sell = itemSellPrice(potion);
+        CHECK(sell > 0 && sell < itemPrice(potion));         // не полная стоимость
+        CHECK(!r.restockShop());                             // нет монет
+        r.grantCoins(Run::kShopRestockCost + 3);
+        r.partyMutable().bag.push_back(potion);
+        CHECK(r.sellItem(0));
+        CHECK(r.party().bag.empty());
+        CHECK(r.party().coins == Run::kShopRestockCost + 3 + sell);
+        CHECK(!r.sellItem(0));                               // нечего продавать
+        CHECK(r.restockShop());
+        CHECK(r.party().coins == 3 + sell);
+        CHECK(r.shopStock() && r.shopStock()->size() == 5);
+        for (const auto& o : *r.shopStock()) CHECK(!o.sold);  // все лоты заново
+        r.leaveShop();
+        CHECK(!r.restockShop());                             // только у торговца
     }
     {   // монеты падают с врагов и с ловушки
         Dungeon d;
@@ -690,10 +959,10 @@ int main() {
 
     // ------------------------------------------- профиль: артефакты и достижения
     {
-        CHECK(achievements().size() == 21);
+        CHECK(achievements().size() == 22);
         std::set<int> ids;
         for (auto& a : achievements()) { ids.insert(a.id); CHECK(a.reward == kAchievementArtifacts && !a.name.empty() && !a.desc.empty()); }
-        CHECK(ids.size() == 21);
+        CHECK(ids.size() == 22);
 
         Profile p;
         RunSummary s;

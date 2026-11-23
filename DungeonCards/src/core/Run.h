@@ -37,6 +37,7 @@ public:
     static constexpr int kFreeRevivePct = 30;               // здоровье после удачной бесплатной попытки
     static constexpr int kTrapNoticePct = 25;               // шанс заметить ловушку без вора
     static constexpr int kTrapCoinPerDifficulty = 10;       // монеты за ловушку за единицу сложности
+    static constexpr int kShopRestockCost = 50;             // обновление ассортимента у торговца
 
     Run(const Dungeon& dungeon, uint32_t seed, std::vector<Hero> heroes = {}, RunOptions options = {});
     Run(const Dungeon& dungeon, uint32_t seed, Party party, int floor, RunOptions options = {});
@@ -69,6 +70,7 @@ public:
     int restHealPct() const;
     bool hasLivingArcher() const;
     bool hasLivingBard() const;
+    bool hasLivingSeidmard() const;           // скидка 20% в кузнице, пока герой жив
     bool restRevive(int heroIndex);               // доплата монетами до 100%; привал продолжается
     bool restReviveArtifact(int heroIndex);       // доплата артефактами до 100%; здоровья больше
     int fullReviveCoinCost() const { return meta_.reviveCoinCost(); }
@@ -83,6 +85,9 @@ public:
     bool openShop();    
     int effectivePrice(const ShopOffer& offer) const;                              // открыть торговлю (если стоим у торговца)
     bool buy(int offerIndex);                         // купить лот: монеты -> предмет в рюкзак
+    bool sellItem(int bagIndex);                      // продать предмет из рюкзака за 50% стоимости
+    bool restockShop();                               // обновить ассортимент за 50 монет
+    int shopRestockCost() const { return kShopRestockCost; }
     void leaveShop();
     bool forgeUpgrade(int bagIndex);
     bool inForgeRoom() const;   // отряд стоит в комнате кузницы
