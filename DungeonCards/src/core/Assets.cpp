@@ -94,8 +94,8 @@ std::vector<AssetSpec> assetManifest() {
     add("items/relic_vampire.png", 128, 128, "Предметы", "Реликвия: Клык вампира (вампиризм)");
 
     // комнаты (плитка на карте подземелья)
-    const RoomType rooms[8] = {RoomType::Start, RoomType::Combat, RoomType::Treasure, RoomType::Trap,
-                               RoomType::Rest, RoomType::Boss, RoomType::Shop, RoomType::Forge};
+    const RoomType rooms[9] = {RoomType::Start, RoomType::Combat, RoomType::Treasure, RoomType::Trap,
+                               RoomType::Rest, RoomType::Boss, RoomType::Shop, RoomType::Forge, RoomType::Event};
     for (RoomType t : rooms)
         add(roomArt(t), 128, 128, "Комнаты", std::string("Плитка комнаты: ") + roomTypeName(t) + ". На карте занимает 60x60 внутри клетки; подпись и звёзды рисуются поверх по центру");
 

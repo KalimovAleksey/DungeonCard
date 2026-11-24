@@ -15,7 +15,22 @@ namespace dc {
 // Exploring: игрок ходит по комнатам (WASD) и управляет инвентарём.
 // Fighting: автобой. RestChoice: привал, ждём решения. BossIntro: показана карточка босса.
 // Shop: отряд у торговца (покупка за монеты).
-enum class RunPhase { Exploring, Fighting, RestChoice, BossIntro, Shop, ForgeChoice, BossReward, Victory, Defeat };
+enum class RunPhase { Exploring, Fighting, RestChoice, BossIntro, Shop, ForgeChoice, BossReward, Victory, Defeat, EventChoice };
+
+// Событие: встреча с NPC. У каждого события как минимум 2 варианта выбора.
+enum class EventKind { LostHero, BloodyAltar, SkeletonRemains, MimicChest, TalkingRaven, CursedBook, MonsterChef };
+
+struct EventChoice {
+    int id = 0;             // порядковый номер (для подписи 1..N)
+    int param = -1;         // доп. данные: индекс героя или номер эффекта
+    std::string name;       // подпись кнопки
+    std::string desc;       // что даёт выбор
+};
+struct EventResult {
+    EventKind kind = EventKind::LostHero;
+    std::string title;      // имя NPC / название события
+    std::string story;      // краткое описание для окна выбора
+};
 
 // Что приносит в забег постоянный профиль: улучшения «Наследия» и доступные артефакты.
 // Улучшения героев (ЗДР/АТК/ЗАЩ) применяются к героям ДО создания Run (Meta::applyToHero).
@@ -76,6 +91,12 @@ public:
     int fullReviveCoinCost() const { return meta_.reviveCoinCost(); }
     int reviveCoinCost() const;                   // доплата монетами за недостающий шанс
     int reviveArtifactCost() const;               // доплата артефактами за недостающий шанс
+    // --- события (Комната: Событие) ---
+    const std::vector<EventChoice>& eventChoices() const;       // варианты выбора (минимум 2)
+    const EventResult& eventResult() const { return eventResult_; }  // название и описание NPC
+    bool takeEventChoice(int choice);                           // применить выбор (0-based)
+    int pendingPlacementBonus() const { return pendingPlacementBonus_; }  // ворон: +1 размещение на след. этаж
+    int takePlacementBonus();                                   // забрать и обнулить бонус
     int artifacts() const { return artifacts_; }    // артефакты, оставшиеся у игрока
     const Meta& meta() const { return meta_; }
     int casualties() const;                          // сколько героев погибало за забег
@@ -122,6 +143,7 @@ public:
 private:
     void say(const std::string& s);
     void enterRoom(Vec2i p);
+    void makeEventChoices();                 // выбрать NPC и подготовить варианты
     void startFight(std::vector<Enemy> enemies, int lootTier, int bossId);
     void onFightWon();
     void resolveTrap(int difficulty);
@@ -148,6 +170,9 @@ private:
     std::vector<Item> loot_;
     std::vector<Item> bossReward_;
     bool bossRewardClaimed_ = false;
+    std::vector<EventChoice> eventChoices_;
+    EventResult eventResult_;
+    int pendingPlacementBonus_ = 0;
     bool bossRewardedRecorded_ = false;
     bool freeReviveUsed_ = false;  // на привале разрешена только одна бесплатная попытка
     int cleared_ = 0;

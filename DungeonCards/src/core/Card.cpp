@@ -13,6 +13,7 @@ const char* roomTypeName(RoomType t) {
         case RoomType::Boss:     return "БОСС";
         case RoomType::Shop:     return "Торговец";
         case RoomType::Forge:    return "Кузница";
+        case RoomType::Event:    return "Событие";
     }
     return "?";
 }
@@ -27,6 +28,7 @@ const char* roomTypeHint(RoomType t) {
         case RoomType::Boss:     return "Финал: победа в забеге";
         case RoomType::Shop:     return "Лавка у края карты: подключи её";
         case RoomType::Forge:    return "Обменяй предмет на улучшенный (tier+1) за монеты";
+        case RoomType::Event:    return "Встреча с NPC: выбор, иногда странное";
     }
     return "";
 }
@@ -41,6 +43,7 @@ const char* roomTypeKey(RoomType t) {
         case RoomType::Boss:     return "boss";
         case RoomType::Shop:     return "shop";
         case RoomType::Forge:    return "forge";
+        case RoomType::Event:    return "event";
     }
     return "room";
 }
@@ -71,6 +74,7 @@ Deck::Deck(Rng& rng, int bossId, int bossMin, int bossMax) {
     add(RoomType::Combat, 11, 1, 3);
     add(RoomType::Treasure, 4, 1, 3);
     add(RoomType::Trap, 4, 1, 3);
+    add(RoomType::Event, 2, 1, 3);
     add(RoomType::Rest, 4, 1, 1);
     add(RoomType::Forge, 3, 1, 2);
     rng.shuffle(pool);

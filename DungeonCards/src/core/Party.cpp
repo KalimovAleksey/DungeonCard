@@ -79,8 +79,11 @@ void Hero::recalc() {
         hp = std::max(1, std::min(hp, newMax));
     }
     maxHp = newMax;
-    atk = baseAtk + buffAtk + buffAtkCombat + atkB;
-    def = baseDef + buffDef + defB;
+    // Отрицательные свойства уникального оружия (события): складываем с базой/баффами.
+    const int penAtk = weapon ? weapon->eventPenaltyAtk : 0;
+    const int penDef = armor ? armor->eventPenaltyDef : 0;
+    atk = baseAtk + buffAtk + buffAtkCombat + atkB + penAtk;
+    def = baseDef + buffDef + defB + penDef;
     spd = baseSpd + spdB;
     critPct = crit + metaCritPct;
     lifestealPct = vamp;

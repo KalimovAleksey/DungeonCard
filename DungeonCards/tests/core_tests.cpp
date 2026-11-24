@@ -1135,6 +1135,61 @@ int main() {
         CHECK(r.summary().casualties == 2 && r.summary().aliveAtEnd == 2);
     }
 
+    // -------------------------------------- события: NPC, варианты, одноразовость
+    {
+        const char* titles[7] = {"Потерявшийся герой", "Кровавый алтарь", "Скелеты героев",
+                                 "Сундук-мимик", "Говорящий ворон", "Проклятая книга", "Повар из монстров"};
+        std::set<std::string> seen;
+        for (int seed = 1; seed <= 400 && seen.size() < 7; ++seed) {
+            Dungeon d;
+            d.place(card(RoomType::Event, 1, doorBit(West)), {s.x + 1, s.y});
+            std::vector<Hero> squad = {makeHero("Воин", Role::Warrior, 40, 8, 3, 4),
+                                       makeHero("Маг", Role::Mage, 26, 11, 1, 5),
+                                       makeHero("Жрица", Role::Cleric, 30, 5, 2, 3),
+                                       makeHero("Вор", Role::Rogue, 28, 9, 2, 7)};
+            Run r(d, seed, squad);
+            CHECK(r.move(East));
+            CHECK(r.phase() == RunPhase::EventChoice);
+            CHECK(r.eventChoices().size() >= 2);
+            CHECK(!r.eventResult().title.empty() && !r.eventResult().story.empty());
+            for (const EventChoice& c : r.eventChoices()) {
+                CHECK(c.id >= 1);
+                CHECK(!c.name.empty() && !c.desc.empty());
+            }
+            const bool raven = r.eventResult().title == "Говорящий ворон";
+            seen.insert(r.eventResult().title);
+            CHECK(r.takeEventChoice(0));
+            CHECK(r.phase() == RunPhase::Exploring || r.phase() == RunPhase::Fighting);
+            CHECK(r.eventChoices().empty());
+            CHECK(!r.takeEventChoice(0));   // выбор можно сделать только один раз
+            if (raven) CHECK(r.pendingPlacementBonus() == 1 && r.takePlacementBonus() == 1 && r.pendingPlacementBonus() == 0);
+            if (r.phase() == RunPhase::Exploring) {
+                CHECK(r.move(West));
+                CHECK(r.move(East));
+                CHECK(r.phase() != RunPhase::EventChoice);  // возвращаться к NPC нельзя
+            }
+        }
+        CHECK(seen.size() == 7);
+        for (const char* title : titles) CHECK(seen.count(title) == 1);
+    }
+    {   // отрицательные свойства вещей из событий влияют на характеристики
+        Hero h = makeHero("Воин", Role::Warrior, 40, 8, 3, 4);
+        Item w = gear(ItemKind::Weapon, 3, 6);
+        w.eventPenaltyAtk = -2;
+        h.weapon = w;
+        h.recalc();
+        CHECK(h.atk == 8 + 6 - 2);
+        w.eventPenaltyAtk = 0;   // кузница снимает свойство
+        h.weapon = w;
+        h.recalc();
+        CHECK(h.atk == 8 + 6);
+        Item a = gear(ItemKind::Armor, 3, 3);
+        a.eventPenaltyDef = -2;
+        h.armor = a;
+        h.recalc();
+        CHECK(h.def == 3 + 3 - 2);
+    }
+
     // --------------------------------------------------- колода и боссы
     Rng rng(42);
     Deck deck(rng, BossDragon);

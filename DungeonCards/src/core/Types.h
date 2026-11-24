@@ -36,6 +36,6 @@ inline uint8_t rotateDoors(uint8_t mask, int quarterTurns) {
     return out;
 }
 
-enum class RoomType { Start, Combat, Treasure, Trap, Rest, Boss, Shop, Forge };
+enum class RoomType { Start, Combat, Treasure, Trap, Rest, Boss, Shop, Forge, Event };
 
 }  // namespace dc

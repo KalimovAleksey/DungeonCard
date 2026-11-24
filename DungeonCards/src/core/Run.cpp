@@ -78,6 +78,17 @@ bool Run::move(Dir d) {
 void Run::enterRoom(Vec2i p) {
     Room* r = dungeon_.roomAt(p);
     if (!r) return;
+    if (r->card.type == RoomType::Event) {  // Событие: встреча с NPC (одноразовое)
+        if (r->eventUsed) {
+            return;  // NPC одноразовый: повторный вход без нового знакомства.
+        }
+        r->eventUsed = true;
+        r->visited = true;
+        makeEventChoices();
+        say(fmt("Событие: %s.", eventResult_.title.c_str()));
+        phase_ = RunPhase::EventChoice;
+        return;
+    }
     if (r->card.type == RoomType::Shop) {  // к торговцу можно возвращаться
         if (!r->visited) {
             r->visited = true;
@@ -135,6 +146,265 @@ void Run::enterRoom(Vec2i p) {
             break;
     }
 }
+namespace {
+
+std::vector<int> livingIndexes(const Party& p) {
+    std::vector<int> out;
+    for (size_t i = 0; i < p.heroes.size(); ++i)
+        if (p.heroes[i].alive()) out.push_back(static_cast<int>(i));
+    return out;
+}
+
+Item cursedRelic(Rng& rng, ItemKind kind, Role role, int penalty) {
+    Item it = rollLootOfKind(rng, kind, 3);   // всегда 3 звезды
+    it.name = std::string("Кость ") + roleTitle(role) + " (проклятая)";
+    if (kind == ItemKind::Weapon) it.eventPenaltyAtk = penalty;
+    else if (kind == ItemKind::Armor) it.eventPenaltyDef = penalty;
+    return it;
+}
+
+}  // namespace
+
+const std::vector<EventChoice>& Run::eventChoices() const { return eventChoices_; }
+
+int Run::takePlacementBonus() {
+    const int v = pendingPlacementBonus_;
+    pendingPlacementBonus_ = 0;
+    return v;
+}
+
+void Run::makeEventChoices() {
+    eventChoices_.clear();
+    eventResult_ = EventResult{};
+
+    static const EventKind kinds[7] = {
+        EventKind::LostHero, EventKind::BloodyAltar, EventKind::SkeletonRemains, EventKind::MimicChest,
+        EventKind::TalkingRaven, EventKind::CursedBook, EventKind::MonsterChef,
+    };
+    const EventKind kind = kinds[rng_.range(0, 6)];
+    eventResult_.kind = kind;
+
+    auto add = [&](int param, const std::string& name, const std::string& desc) {
+        EventChoice c;
+        c.id = static_cast<int>(eventChoices_.size()) + 1;
+        c.param = param;
+        c.name = name;
+        c.desc = desc;
+        eventChoices_.push_back(c);
+    };
+    const std::vector<int> alive = livingIndexes(party_);
+
+    switch (kind) {
+        case EventKind::LostHero:
+            eventResult_.title = "Потерявшийся герой";
+            eventResult_.story = "У тропы сидит воин, отставший от своей группы. Он готов занять место любого из ваших.";
+            for (int idx : alive)
+                add(idx, "Заменить: " + party_.heroes[idx].name, "Найденный герой возьмёт его вещи и баффы.");
+            if (alive.size() < 2) add(-1, "Оставить отряд", "Никого не менять.");
+            add(-1, "Отказаться", "Пройти мимо, не меняя состав.");
+            break;
+
+        case EventKind::BloodyAltar:
+            eventResult_.title = "Кровавый алтарь";
+            eventResult_.story = "Камень требует крови. Живые герои заплатят частью здоровья.";
+            add(0, "Пожертвовать кровью", "Каждый живой теряет до 15% ЗДР, но получает +2 АТК и +1 ЗАЩ.");
+            add(1, "Забрать монеты с алтаря", "+15 монет без усиления.");
+            break;
+
+        case EventKind::SkeletonRemains:
+            eventResult_.title = "Скелеты героев";
+            eventResult_.story = "В нише лежат останки воинов. Их вещи сильны, но прокляты.";
+            add(0, "Взять оружие", "Оружие 3 тира под героя, но -2 АТК. Снимается в кузнице за 5 монет.");
+            add(1, "Взять доспех", "Броня 3 тира, но -2 ЗАЩ. Снимается в кузнице за 5 монет.");
+            add(2, "Не трогать", "Оставить кости в покое.");
+            break;
+
+        case EventKind::MimicChest:
+            eventResult_.title = "Сундук-мимик";
+            eventResult_.story = "Ящик вдруг вздохнул и открыл зубастую пасть. Вор может усыпить его.";
+            if (party_.findAlive(Role::Rogue))
+                add(0, "Вор обезвреживает", "Без боя: добыча 3 тира и +20 монет.");
+            add(1, "Открыть силой", "Бой с мимиком 3 звезды, добыча 3 тира.");
+            add(2, "Обойти стороной", "Ни боя, ни добычи.");
+            break;
+
+        case EventKind::TalkingRaven:
+            eventResult_.title = "Говорящий ворон";
+            eventResult_.story = "Ворон каркает: «Покорми меня — подскажу, где поставить ещё одну комнату».";
+            add(0, "Покормить ворона", "+1 размещение комнаты на следующем этаже.");
+            add(1, "Уйти", "+10 монет мелочи с ветки.");
+            break;
+
+        case EventKind::CursedBook:
+            eventResult_.title = "Проклятая книга";
+            eventResult_.story = "Книга перелистывается сама. Знания даются легко, но память стирается.";
+            add(0, "Прочесть вслух", "Всем живым +3 АТК и -2 ЗАЩ до конца забега.");
+            add(1, "Забрать с собой", "+1 артефакт, но -10 монет.");
+            add(2, "Закрыть и уйти", "Ничего не менять.");
+            break;
+
+        case EventKind::MonsterChef: {
+            eventResult_.title = "Повар из монстров";
+            eventResult_.story = "Повар помешивает похлёбку: «Вы слишком целы! Я обижусь!»";
+            const int totalMax = party_.totalMaxHp();
+            const int hpPct = totalMax > 0 ? party_.totalHp() * 100 / totalMax : 100;
+            if (hpPct < 80) {
+                add(0, "Съесть похлёбку", "Все живые лечатся на 30% макс. ЗДР.");
+                add(1, "Отказаться", "Повар вздохнёт, но не тронет.");
+            } else {
+                add(0, "Попробовать всё равно", "Обиженный повар заденет всех: -8% ЗДР.");
+                add(1, "Похвалить повара", "Спокойно уйти, ничего не теряя.");
+            }
+            break;
+        }
+    }
+}
+
+bool Run::takeEventChoice(int choiceIdx) {
+    if (phase_ != RunPhase::EventChoice || choiceIdx < 0 || choiceIdx >= static_cast<int>(eventChoices_.size()))
+        return false;
+    const EventChoice c = eventChoices_[choiceIdx];
+    const std::vector<int> alive = livingIndexes(party_);
+
+    auto healAll = [&](int pct) {
+        for (Hero& h : party_.heroes)
+            if (h.alive()) h.hp = std::min(h.maxHp, h.hp + h.maxHp * pct / 100);
+    };
+    auto hurtAll = [&](int pct) {
+        for (Hero& h : party_.heroes)
+            if (h.alive()) h.hp = std::max(1, h.hp - std::max(1, h.maxHp * pct / 100));
+    };
+    auto buffAll = [&](int atk, int def) {
+        for (size_t i = 0; i < party_.heroes.size(); ++i)
+            if (party_.heroes[i].alive()) party_.buff(static_cast<int>(i), atk, def);
+    };
+
+    switch (eventResult_.kind) {
+        case EventKind::LostHero: {
+            if (c.param < 0 || c.param >= static_cast<int>(party_.heroes.size()) || !party_.heroes[c.param].alive()) {
+                say("Событие: отряд остался как есть.");
+                break;
+            }
+            const std::string oldName = party_.heroes[c.param].name;
+            const std::vector<Hero> roster = heroRoster();
+            Hero found = roster[rng_.range(0, static_cast<int>(roster.size()) - 1)];
+            found.name = "Найденный " + found.name;
+            found.baseHp += (floor_ - 1) * 4;
+            found.baseAtk += (floor_ - 1);
+            found.baseDef += (floor_ - 1) / 2;
+            found.weapon = party_.heroes[c.param].weapon;
+            found.armor = party_.heroes[c.param].armor;
+            found.relic = party_.heroes[c.param].relic;
+            found.buffAtk = party_.heroes[c.param].buffAtk;
+            found.buffDef = party_.heroes[c.param].buffDef;
+            found.hp = found.maxHp = found.baseHp;
+            found.recalc();
+            party_.heroes[c.param] = found;
+            if (c.param < static_cast<int>(squad_.size())) squad_[c.param] = found.role;
+            if (c.param < static_cast<int>(died_.size())) died_[c.param] = false;
+            say(fmt("Событие: %s занял место %s.", found.name.c_str(), oldName.c_str()));
+            break;
+        }
+
+        case EventKind::BloodyAltar:
+            if (c.param == 0) {
+                for (Hero& h : party_.heroes)
+                    if (h.alive()) h.hp = std::max(1, h.hp - h.maxHp * 15 / 100);
+                buffAll(2, 1);
+                say("Событие: алтарь забрал кровь, отряд стал сильнее (+2 АТК, +1 ЗАЩ).");
+            } else {
+                party_.coins += 15;
+                say("Событие: монеты с алтаря: +15.");
+            }
+            break;
+
+        case EventKind::SkeletonRemains:
+            if (c.param == 0 || c.param == 1) {
+                if (alive.empty()) {
+                    say("Событие: некому взять вещь.");
+                    break;
+                }
+                const Role role = party_.heroes[alive[rng_.range(0, static_cast<int>(alive.size()) - 1)]].role;
+                const Item it = cursedRelic(rng_, c.param == 0 ? ItemKind::Weapon : ItemKind::Armor, role, -2);
+                party_.bag.push_back(it);
+                newLoot_ = true;
+                say(fmt("Событие: найдена вещь: %s.", it.name.c_str()));
+            } else {
+                say("Событие: кости оставлены в покое.");
+            }
+            break;
+
+        case EventKind::MimicChest:
+            if (c.param == 0) {
+                giveLoot(3);
+                party_.coins += 20;
+                say("Событие: Вор усыпил мимика. Добыча 3 тира и +20 монет.");
+            } else if (c.param == 1) {
+                Enemy chest;
+                chest.name = "Сундук-мимик";
+                chest.maxHp = chest.hp = 58;
+                chest.atk = 14;
+                chest.def = 4;
+                chest.spd = 3;
+                chest.coins = 22;
+                chest.size = 100;
+                chest.slot = 1;
+                say("Событие: мимик нападает!");
+                startFight({chest}, 3, -1);
+            } else {
+                say("Событие: сундук остался стоять.");
+            }
+            break;
+
+        case EventKind::TalkingRaven:
+            if (c.param == 0) {
+                pendingPlacementBonus_ += 1;
+                say("Событие: ворон обещает +1 комнату на следующем этаже.");
+            } else {
+                party_.coins += 10;
+                say("Событие: мелочь с ветки: +10 монет.");
+            }
+            break;
+
+        case EventKind::CursedBook:
+            if (c.param == 0) {
+                buffAll(3, -2);
+                say("Событие: знания дались ценой памяти: +3 АТК, -2 ЗАЩ.");
+            } else if (c.param == 1) {
+                grantArtifacts(1);
+                party_.coins = std::max(0, party_.coins - 10);
+                say("Событие: книга забрана: +1 артефакт, -10 монет.");
+            } else {
+                say("Событие: книга закрыта.");
+            }
+            break;
+
+        case EventKind::MonsterChef: {
+            const int totalMax = party_.totalMaxHp();
+            const int hpPct = totalMax > 0 ? party_.totalHp() * 100 / totalMax : 100;
+            if (hpPct < 80) {
+                if (c.param == 0) {
+                    healAll(30);
+                    say("Событие: повар накормил отряд похлёбкой (+30% ЗДР).");
+                } else {
+                    say("Событие: повар ушёл готовить для себя.");
+                }
+            } else if (c.param == 0) {
+                hurtAll(8);
+                say("Событие: повар обиделся и шлёпнул всех ложкой (-8% ЗДР).");
+            } else {
+                say("Событие: повар обрадовался похвале.");
+            }
+            break;
+        }
+    }
+
+    eventChoices_.clear();
+    eventResult_ = EventResult{};
+    if (phase_ == RunPhase::EventChoice) phase_ = RunPhase::Exploring;
+    return true;
+}
+
 bool Run::inForgeRoom() const {
     const Room* r = dungeon_.roomAt(pos_);
     return r && r->card.type == RoomType::Forge;

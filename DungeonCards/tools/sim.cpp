@@ -290,6 +290,22 @@ static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems,
                 if (smartItems) distribute(run, true, rng);
                 run.leaveShop();
                 break;
+            case RunPhase::ForgeChoice:
+                if (smartItems) {
+                    const Party& p = run.party();
+                    for (int b = 0; b < (int)p.bag.size(); ++b) {
+                        if (p.bag[b].kind == ItemKind::Potion || p.bag[b].tier >= 4) continue;
+                        if (p.coins >= run.forgePrice(p.bag[b])) { run.forgeUpgrade(b); break; }
+                    }
+                    distribute(run, true, rng);
+                }
+                run.leaveForge();
+                break;
+            case RunPhase::EventChoice:
+                // NPC всегда даёт минимум 2 варианта; первый — основной/common.
+                if (!run.takeEventChoice(0)) run.takeEventChoice(1);
+                if (smartItems) distribute(run, true, rng);
+                break;
             case RunPhase::Exploring: {
                 run.closeCombat();
                 distribute(run, smartItems, rng);

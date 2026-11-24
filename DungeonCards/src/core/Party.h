@@ -26,6 +26,9 @@ struct Item {
     int tier = 1;     // 1..4
     int power = 0;    // основная величина (АТК / ЗАЩ / лечение / сила реликвии)
     RelicEffect relic = RelicEffect::Vitality;
+    // Отрицательные свойства событий: можно снять в кузнице (уникальное оружие).
+    int eventPenaltyAtk = 0;
+    int eventPenaltyDef = 0;
 };
 
 // Добыча по уровню 1..4 (чем выше сложность комнаты, тем сильнее предмет).

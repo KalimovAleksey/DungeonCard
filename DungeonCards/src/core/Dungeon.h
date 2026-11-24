@@ -13,6 +13,7 @@ struct Room {
     Card card;
     Vec2i pos;
     bool visited = false;
+    bool eventUsed = false;
 };
 
 // Подземелье на сетке. Правило размещения («свободное, но с обязательной связью»):
@@ -49,6 +50,7 @@ public:
     bool placeShopAt(Vec2i p);            // поставить торговца в клетку p (для тестов)
     bool hasShop() const { return hasShop_; }
     Vec2i shopPos() const { return shopPos_; }
+    bool shopConnected() const { const Room* r = hasShop_ ? roomAt(shopPos_) : nullptr; return r != nullptr && connected(shopPos_); }
     // Достижима ли комната от входа (по стыкующимся дверям).
     bool connected(Vec2i p) const { return reach_.count(p) > 0; }
 

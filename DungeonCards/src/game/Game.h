@@ -142,6 +142,9 @@ private:
     void updateAnims(float dt);
     void clearAnims();
 
+    void updateEventChoice();
+    void drawEventChoice();
+
     // отрисовка
     void draw();
     void drawScreen(Screen s);
@@ -222,6 +225,7 @@ private:
     bool runRecorded_ = false;
     std::string legacyMsg_;
     float achScroll_ = 0.f;
+    float guideScroll_ = 0.f;  // прокрутка страницы «Механики» на основной колонке
     std::vector<Resolution> resolutions_;
     RenderTexture2D target_{};
     int targetW_ = 0, targetH_ = 0;   // размер буфера в физических пикселях окна

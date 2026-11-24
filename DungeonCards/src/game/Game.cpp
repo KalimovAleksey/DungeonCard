@@ -63,6 +63,7 @@ Color roomColor(RoomType t) {
         case RoomType::Boss:     return {135, 55, 165, 255};
         case RoomType::Shop:     return {55, 160, 175, 255};
         case RoomType::Forge:    return {200, 120, 60, 255};
+        case RoomType::Event:    return {120, 180, 220, 255};
     }
     return kDim;
 }
@@ -138,7 +139,7 @@ bool inRect(Vector2 m, int x, int y, int w, int h) { return inR(m, {x, y, w, h})
 // кнопки меню (6 пунктов: Играть, Механики, Достижения, Наследие, Настройки, Выход)
 R menuBtn(int i, int y0 = 262) { return {490, y0 + i * 62, 300, 52}; }
 
-// экран достижений: два столбца, строки вниз (со скроллом); экран «Наследие»: два столбца карточек
+// экран достижений: два столбца, строки вниз (со скроллом); экран «Наследие»: город + карточки улучшений
 R achRow(int i) { return {40 + (i % 2) * 620, 130 + (i / 2) * 58, 600, 54}; }
 R legacyCard(int i) { return {40 + (i / 6) * 620, 124 + (i % 6) * 86, 600, 80}; }
 R legacyBuyBtn(int i) {
@@ -513,8 +514,8 @@ void Game::nextFloor() {
     for (auto& s : hand_) s.has = false;
     for (auto& s : hand_) refill(s);
 
-    // Сброс лимитов
-    placementsLeft_ = kMaxPlacements;
+    // Сброс лимитов. Говорящий ворон даёт +1 размещение на этот этаж.
+    placementsLeft_ = kMaxPlacements + (run_ ? run_->takePlacementBonus() : 0);
     discardsLeft_ = kMaxDiscards;
     selected_ = 0;
 
@@ -684,7 +685,7 @@ void Game::updateAchievements() {
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && inR(mouse(), kBackBtn)) screen_ = Screen::MainMenu;
 }
 
-// «Наследие»: покупка постоянных улучшений за артефакты.
+// «Наследие»: покупка постоянных улучшений за артефакты; фон города.
 void Game::updateLegacy() {
     const Vector2 m = mouse();
     if (!IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) return;
@@ -707,10 +708,69 @@ void Game::updateLegacy() {
     }
 }
 
+// Окно события рисуется поверх арены, поэтому кнопки считаются в её координатах.
+static R eventChoiceBtn(int i) {
+    return {kGridX + 40, kGridY + 150 + i * 62, kArenaW - 80, 56};
+}
+
+// --- Событие (комната: Событие): выбор среди вариантов реальных NPC
+void Game::updateEventChoice() {
+    if (run_->phase() != RunPhase::EventChoice || run_->eventChoices().empty()) return;
+    const Vector2 m = mouse();
+    const bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    const int n = std::min(static_cast<int>(run_->eventChoices().size()), 5);
+    for (int i = 0; i < n; ++i) {
+        if (IsKeyPressed(KEY_ONE + i) || (click && inR(m, eventChoiceBtn(i)))) {
+            run_->takeEventChoice(i);
+            return;
+        }
+    }
+}
+
+void Game::drawEventChoice() {
+    const Run& r = *run_;
+    const EventResult& info = r.eventResult();
+    const Color tint = roomColor(RoomType::Event);
+    const float cx = kGridX + kArenaW / 2.f;
+
+    DrawRectangle(kGridX, kGridY, kArenaW, kArenaH, Color{10, 13, 20, 226});
+    DrawRectangleLines(kGridX, kGridY, kArenaW, kArenaH, tint);
+    drawTextCentered("СОБЫТИЕ", cx, kGridY + 16.f, 22, tint);
+    drawTextCentered(info.title, cx, kGridY + 48.f, 24, kText);
+    const auto story = wrap(info.story, kArenaW - 80.f, 15.f);
+    float sy = kGridY + 84.f;
+    for (const auto& line : story) {
+        drawTextCentered(line, cx, sy, 15, kDim);
+        sy += 18.f;
+    }
+
+    const auto& cs = r.eventChoices();
+    const int n = std::min(static_cast<int>(cs.size()), 5);
+    const Vector2 m = mouse();
+    for (int i = 0; i < n; ++i) {
+        const R b = eventChoiceBtn(i);
+        const bool hover = inR(m, b);
+        DrawRectangle(b.x, b.y, b.w, b.h, hover ? Color{52, 64, 84, 255} : Color{28, 34, 46, 255});
+        DrawRectangleLines(b.x, b.y, b.w, b.h, hover ? tint : kGridLine);
+        drawText(fmt("%d. %s", i + 1, cs[i].name.c_str()), b.x + 12.f, b.y + 6.f, 17, hover ? tint : kText);
+        const auto dl = wrap(cs[i].desc, b.w - 24.f, 13.f);
+        float dy = b.y + 28.f;
+        for (size_t k = 0; k < dl.size() && k < 2; ++k, dy += 14.f)
+            drawText(dl[k], b.x + 12.f, dy, 13, kDim);
+    }
+    drawTextCentered("Цифра 1-5 или клик - выбрать вариант", cx, kGridY + kArenaH - 26.f, 14, kDim);
+}
+
 void Game::updateGuide() {
+    const float wheel = GetMouseWheelMove();
+    if (wheel != 0.f) guideScroll_ -= wheel * 26.f;
+    if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_PAGE_DOWN)) guideScroll_ += 30.f;
+    if (IsKeyPressed(KEY_UP)   || IsKeyPressed(KEY_PAGE_UP))   guideScroll_ -= 30.f;
     const bool back = IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_BACKSPACE);
-    if (back || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && inR(mouse(), kBackBtn)))
+    if (back || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && inR(mouse(), kBackBtn))) {
         screen_ = Screen::MainMenu;
+        guideScroll_ = 0.f;
+    }
 }
 
 void Game::updatePause() {
@@ -904,7 +964,7 @@ void Game::updateBuild() {
 void Game::updateForge() {
     if (invSel_ >= static_cast<int>(run_->party().bag.size())) invSel_ = -1;
     const Vector2 m = mouse();
-    const auto& bag = run_->party().bag;
+    auto& bag = run_->partyMutable().bag;
 
     // Улучшение - отдельное подтверждение: сначала выбор, потом кнопка/Enter.
     const auto tryUpgrade = [&]() {
@@ -920,6 +980,37 @@ void Game::updateForge() {
         if (run_->forgeUpgrade(invSel_))
             forgeMsg_ = fmt("Улучшено: %s теперь ур.%d.", bag[invSel_].name.c_str(), bag[invSel_].tier);
     };
+
+    // Снятие отрицательных свойств уникальной вещи из событий (вместо улучшения).
+    const auto tryRemovePenalty = [&]() {
+        Item* target = nullptr;
+        Hero* owner = nullptr;
+        if (invSel_ >= 0 && invSel_ < static_cast<int>(bag.size())) {
+            Item& it = bag[invSel_];
+            if (it.eventPenaltyAtk != 0 || it.eventPenaltyDef != 0) target = &it;
+        }
+        if (!target) {
+            for (Hero& h : run_->partyMutable().heroes) {
+                for (std::optional<Item>* slot : {&h.weapon, &h.armor}) {
+                    if (*slot && ((*slot)->eventPenaltyAtk != 0 || (*slot)->eventPenaltyDef != 0)) {
+                        target = &**slot;
+                        owner = &h;
+                        break;
+                    }
+                }
+                if (target) break;
+            }
+        }
+        if (!target) { forgeMsg_ = "Нет отрицательных свойств. Выбери вещь в рюкзаке."; return; }
+        if (run_->party().coins < 5) { forgeMsg_ = "Не хватает монет: 5."; return; }
+        run_->partyMutable().coins -= 5;
+        target->eventPenaltyAtk = 0;
+        target->eventPenaltyDef = 0;
+        if (owner) owner->recalc();
+        forgeMsg_ = "Отрицательные свойства очищены (-5 монет).";
+    };
+
+    if (IsKeyPressed(KEY_E)) tryRemovePenalty();
 
     if (IsKeyPressed(KEY_ESCAPE) || (IsKeyPressed(KEY_ENTER) && invSel_ < 0)) {
         run_->leaveForge();
@@ -1051,6 +1142,9 @@ void Game::updateRun(float dt) {
         case RunPhase::Shop:
             if (invOpen_) updateInventory();
             else updateShop();
+            break;
+        case RunPhase::EventChoice:
+            updateEventChoice();
             break;
         case RunPhase::Fighting:
             if (!paused_) {
@@ -1251,7 +1345,14 @@ void Game::updateShop() {
     }
 }
 
-static R devRect() { return {20, 360, 360, 330}; }
+// Панель разработчика stretched на правую informational панель: слева остаются
+// сетка подземелья и руки карт, с которыми нужно работать в режиме постройки.
+static R devRect() { return {kPanelX - 6, 10, kPanelW + 12, kScreenH - 20}; }
+
+static const RoomType kDevRooms[9] = {
+    RoomType::Start, RoomType::Combat, RoomType::Treasure, RoomType::Trap, RoomType::Rest,
+    RoomType::Boss, RoomType::Shop, RoomType::Forge, RoomType::Event,
+};
 
 bool Game::updateDevPanel() {
     if (!devOpen_) return false;
@@ -1263,7 +1364,7 @@ bool Game::updateDevPanel() {
 
     // tier buttons
     for (int t = 1; t <= 4; ++t) {
-        R r{panel.x + 12 + (t - 1) * 84, panel.y + 62, 76, 30};
+        R r{panel.x + 12 + (t - 1) * 84, panel.y + 82, 76, 28};
         if (inR(m, r)) { devItemTier_ = t; devMsg_ = fmt("Тир предметов: %d", t); return true; }
     }
 
@@ -1276,7 +1377,7 @@ bool Game::updateDevPanel() {
         {ItemKind::Potion, true},
     };
     for (int i = 0; i < 4; ++i) {
-        R r{panel.x + 12 + (i % 2) * 168, panel.y + 102 + (i / 2) * 36, 160, 30};
+        R r{panel.x + 12 + (i % 2) * 168, panel.y + 118 + (i / 2) * 34, 160, 30};
         if (!inR(m, r)) continue;
         if (!run_) { devMsg_ = "Нет активного забега."; return true; }
         Rng rr(static_cast<uint32_t>(GetTime() * 1000.0) + static_cast<uint32_t>(i * 101 + devItemTier_));
@@ -1286,14 +1387,33 @@ bool Game::updateDevPanel() {
         return true;
     }
 
+    // Room buttons: только в режиме постройки заменяют тип выбранной карты в руке.
+    // Во время забега новые карты не выбираются — забег уже начат.
+    for (int t = 0; t < 9; ++t) {
+        R r{panel.x + 12 + (t % 3) * 156, panel.y + 258 + (t / 3) * 32, 144, 28};
+        if (!inR(m, r)) continue;
+        if (screen_ != Screen::Build) {
+            devMsg_ = "Выбор карт доступен только при размещении подземелья.";
+            return true;
+        }
+        if (!hand_[selected_].has) { devMsg_ = "Выберите карту в руке."; return true; }
+        hand_[selected_].card.type = kDevRooms[t];
+        if (kDevRooms[t] == RoomType::Boss) hand_[selected_].card.difficulty = 4;
+        else if (kDevRooms[t] == RoomType::Start) hand_[selected_].card.difficulty = 0;
+        else if (hand_[selected_].card.difficulty < 1 || hand_[selected_].card.difficulty > 3)
+            hand_[selected_].card.difficulty = 1;
+        devMsg_ = fmt("Карта в руке: %s. Поставь её кликом на поле.", roomTypeName(kDevRooms[t]));
+        return true;
+    }
+
     // gold
-    if (inR(m, {panel.x + 12, panel.y + 182, 160, 30})) {
+    if (inR(m, {panel.x + 12, panel.y + 190, 160, 30})) {
         if (!run_) { devMsg_ = "Нет активного забега."; return true; }
         run_->grantCoins(50);
         devMsg_ = fmt("Золото: %d (+50)", run_->party().coins);
         return true;
     }
-    if (inR(m, {panel.x + 180, panel.y + 182, 160, 30})) {
+    if (inR(m, {panel.x + 180, panel.y + 190, 160, 30})) {
         if (!run_) { devMsg_ = "Нет активного забега."; return true; }
         run_->partyMutable().coins = std::max(0, run_->party().coins - 50);
         devMsg_ = fmt("Золото: %d (-50)", run_->party().coins);
@@ -1304,8 +1424,8 @@ bool Game::updateDevPanel() {
     if (!run_) { devMsg_ = "Нет активного забега."; return true; }
     auto& heroes = run_->partyMutable().heroes;
     for (int i = 0; i < static_cast<int>(heroes.size()) && i < kMaxRoster; ++i) {
-        R heal{panel.x + 220, panel.y + 252 + i * 18, 56, 16};
-        R kill{panel.x + 282, panel.y + 252 + i * 18, 56, 16};
+        R heal{panel.x + 280, panel.y + 400 + i * 20, 64, 18};
+        R kill{panel.x + 352, panel.y + 400 + i * 20, 64, 18};
         if (inR(m, heal)) {
             heroes[i].hp = heroes[i].maxHp;
             heroes[i].away = false;
@@ -1323,35 +1443,61 @@ bool Game::updateDevPanel() {
 
 void Game::drawDevPanel() {
     const R panel = devRect();
-    DrawRectangle(panel.x, panel.y, panel.w, panel.h, Color{18, 20, 28, 245});
+    DrawRectangle(panel.x, panel.y, panel.w, panel.h, Color{16, 18, 26, 248});
     DrawRectangleLines(panel.x, panel.y, panel.w, panel.h, Color{255, 120, 120, 255});
-    drawText("DEV (Ctrl+L)", panel.x + 12.f, panel.y + 10.f, 22, Color{255, 140, 140, 255});
-    drawText(fmt("Тир: %d", devItemTier_), panel.x + 170.f, panel.y + 14.f, 16, kDim);
+    drawText("КОНСОЛЬ РАЗРАБОТЧИКА", panel.x + 12.f, panel.y + 10.f, 20, Color{255, 140, 140, 255});
+    drawText(fmt("Тир: %d", devItemTier_), panel.x + panel.w - 96.f, panel.y + 14.f, 15, kDim);
+    DrawLine(panel.x + 12, panel.y + 54, panel.x + panel.w - 12, panel.y + 54, Color{90, 60, 70, 255});
 
+    // компактные кнопки: обычный drawButton рисует 22-й шрифт и не помещается в 28 px
+    const Vector2 m = mouse();
+    auto smallBtn = [&](R r, const std::string& label, bool selected, bool enabled, int fs = 14) {
+        const bool hover = enabled && inR(m, r);
+        DrawRectangle(r.x, r.y, r.w, r.h, !enabled ? Color{28, 29, 36, 255}
+                                                   : hover ? Color{56, 62, 84, 255} : Color{36, 38, 52, 255});
+        DrawRectangleLines(r.x, r.y, r.w, r.h, selected ? kGood : hover ? kAccent : kGridLine);
+        drawTextCentered(label, r.x + r.w / 2.f, r.y + (r.h - fs) / 2.f - 1.f, fs, enabled ? kText : kDim);
+    };
+
+    drawText("ПРЕДМЕТЫ", panel.x + 12.f, panel.y + 60.f, 14, kDim);
     for (int t = 1; t <= 4; ++t) {
-        R r{panel.x + 12 + (t - 1) * 84, panel.y + 62, 76, 30};
-        drawButton(r.x, r.y, r.w, r.h, fmt("T%d", t), devItemTier_ == t, true);
+        R r{panel.x + 12 + (t - 1) * 84, panel.y + 82, 76, 28};
+        smallBtn(r, fmt("T%d", t), devItemTier_ == t, true, 15);
     }
     const char* labels[4] = {"Оружие", "Броня", "Реликвия", "Зелье"};
     for (int i = 0; i < 4; ++i) {
-        R r{panel.x + 12 + (i % 2) * 168, panel.y + 102 + (i / 2) * 36, 160, 30};
-        drawButton(r.x, r.y, r.w, r.h, labels[i], false, run_ != nullptr);
+        R r{panel.x + 12 + (i % 2) * 168, panel.y + 118 + (i / 2) * 34, 160, 30};
+        smallBtn(r, labels[i], false, run_ != nullptr, 15);
     }
-    drawButton(panel.x + 12, panel.y + 182, 160, 30, "+50 золота", false, run_ != nullptr);
-    drawButton(panel.x + 180, panel.y + 182, 160, 30, "-50 золота", false, run_ != nullptr);
-    drawText("Герои: ЛКМ лечить / убить", panel.x + 12.f, panel.y + 224.f, 14, kDim);
+    smallBtn({panel.x + 12, panel.y + 190, 160, 30}, "+50 золота", false, run_ != nullptr, 15);
+    smallBtn({panel.x + 180, panel.y + 190, 160, 30}, "-50 золота", false, run_ != nullptr, 15);
+    DrawLine(panel.x + 12, panel.y + 232, panel.x + panel.w - 12, panel.y + 232, Color{90, 60, 70, 255});
+
+    drawText("КОМНАТЫ: заменить карту в руке", panel.x + 12.f, panel.y + 238.f, 14, kDim);
+    const bool roomEnabled = screen_ == Screen::Build && hand_[selected_].has;
+    for (int t = 0; t < 9; ++t) {
+        R r{panel.x + 12 + (t % 3) * 156, panel.y + 258 + (t / 3) * 32, 144, 28};
+        smallBtn(r, roomTypeName(kDevRooms[t]), false, roomEnabled, 14);
+    }
+    if (!roomEnabled)
+        drawText("Доступно только при размещении подземелья.", panel.x + 12.f, panel.y + 358.f, 12, kDim);
+    DrawLine(panel.x + 12, panel.y + 376, panel.x + panel.w - 12, panel.y + 376, Color{90, 60, 70, 255});
+
+    drawText("ГЕРОИ: лечить / убить", panel.x + 12.f, panel.y + 382.f, 14, kDim);
     if (run_) {
         const auto& heroes = run_->party().heroes;
         for (int i = 0; i < static_cast<int>(heroes.size()) && i < kMaxRoster; ++i) {
             const auto& h = heroes[i];
-            drawText(fmt("%-10s %3d/%3d", h.name.c_str(), std::max(0, h.hp), h.maxHp), panel.x + 12.f, panel.y + 252.f + i * 18.f, 14, h.alive() ? kText : kBad);
-            drawButton(panel.x + 220, panel.y + 252 + i * 18, 56, 16, "леч", false, true);
-            drawButton(panel.x + 282, panel.y + 252 + i * 18, 56, 16, "убить", false, true);
+            drawText(fmt("%-10s %3d/%3d", h.name.c_str(), std::max(0, h.hp), h.maxHp),
+                     panel.x + 12.f, panel.y + 402.f + i * 20.f, 14, h.alive() ? kText : kBad);
+            smallBtn({panel.x + 280, panel.y + 400 + i * 20, 64, 18}, "леч", false, true, 12);
+            smallBtn({panel.x + 352, panel.y + 400 + i * 20, 64, 18}, "убить", false, true, 12);
         }
     } else {
-        drawText("Открой забег для действий с героями.", panel.x + 12.f, panel.y + 252.f, 14, kDim);
+        drawText("Открой забег для действий с героями.", panel.x + 12.f, panel.y + 402.f, 14, kDim);
     }
-    if (!devMsg_.empty()) drawText(devMsg_, panel.x + 12.f, panel.y + panel.h - 24.f, 14, Color{255, 200, 160, 255});
+    drawText("Ctrl+L - закрыть панель", panel.x + 12.f, panel.y + panel.h - 48.f, 13, kDim);
+    if (!devMsg_.empty()) drawText(devMsg_, panel.x + 12.f, panel.y + panel.h - 26.f, 14, Color{255, 200, 160, 255});
 }
 
 // Инвентарь: выбрать предмет в рюкзаке, затем кликнуть слот героя (оружие/броня/реликвия)
@@ -1895,32 +2041,34 @@ void Game::drawMainMenu() {
                      kScreenW / 2.f, 686.f, 15, kDim);
 }
 
-// Справка в главном меню: слева - механики, справа - особенности каждого героя.
+// Справка в главном меню: слева - механики (прокручивается), справа - особенности каждого героя.
 void Game::drawGuide() {
-    drawTextCentered("МЕХАНИКИ", kScreenW / 2.f, 16.f, 42, kAccent);
-    drawTextCentered("Краткая справка: как устроен бой и что умеет каждый герой", kScreenW / 2.f, 62.f, 16, kDim);
+    drawTextCentered("МЕХАНИКИ", kScreenW / 2.f, 16.f, 34, kAccent);
+    drawTextCentered("Краткая справка: как устроен бой и что умеет каждый герой", kScreenW / 2.f, 62.f, 17, kDim);
 
     const int top = 92, h = 546;
     const int leftX = 32, leftW = 556;
     const int rightX = 608, rightW = kScreenW - rightX - 32;  // 640
+    const int visibleTop = top + 5, visibleH = h - 10;
 
     DrawRectangle(leftX, top, leftW, h, Color{24, 26, 34, 240});
     DrawRectangleLines(leftX, top, leftW, h, kGridLine);
     DrawRectangle(rightX, top, rightW, h, Color{24, 26, 34, 240});
     DrawRectangleLines(rightX, top, rightW, h, kGridLine);
 
-    // ---- левая колонка: правила
-    drawText("КАК УСТРОЕН БОЙ", leftX + 16.f, top + 10.f, 19, kAccent);
-    float y = top + 40.f;
+    // Прокручиваем только левую колонку (механики), чтобы новые пункты не перекрывали фон и ставали читаемыми.
+    beginScissor(leftX, visibleTop, leftW, visibleH);
+    float y = top + 30.f - guideScroll_;
     const auto section = [&](const char* title, const char* body) {
-        drawText(title, leftX + 16.f, y, 16, kGood);
-        y += 19.f;
-        for (const auto& line : wrap(body, leftW - 32.f, 14.f)) {
-            drawText(line, leftX + 16.f, y, 14, kText);
-            y += 17.f;
+        drawText(title, leftX + 16.f, y, 17, kGood);
+        y += 22.f;
+        for (const auto& line : wrap(body, leftW - 32.f, 15.f)) {
+            drawText(line, leftX + 16.f, y, 15, kText);
+            y += 18.f;
         }
-        y += 7.f;
+        y += 8.f;
     };
+    drawText("КАК УСТРОЕН БОЙ", leftX + 16.f, y, 19, kAccent); y += 22.f;
     section("Ход боя и скорость", "Герой сначала атакует, затем применяет умение. СКР определяет, кто ходит чаще.");
     section("Защита и урон", "ЗАЩ вычитается из удара, но всегда проходит минимум 25% АТК. Руны снимают ЗАЩ для всей команды.");
     section("Провокация", "Воин и Паладин получают в 3 раза больше вражеских атак. Ставь их вперёд, чтобы беречь лекарей.");
@@ -1928,6 +2076,21 @@ void Game::drawGuide() {
     section("Крит, ярость, вампиризм", "Крит даёт x2 урона (25% у Вора). Берсерк ниже 50% ЗДР бьёт ещё раз и даёт всем 10% вампиризма.");
     section("Лечение", "Жрица лечит самого раненого (до 60% ЗДР), Паладин - немного, Друид - цепью по всем, если кто-то ранен.");
     section("Торговец и кузница", "Живой Бард даёт -15% у торговца. Живой Сейдмард даёт -20% за улучшение предмета в кузнице.");
+    section("Торговец", "Появляется у края карты, но если его комната не стыкуется с подземельем — входа нет. Строительство стоейкое.");
+    section("Инвентарь", "Иконки снаряжения: оружие, броня, реликвия, зелья. Выбор кликом по ячейке; I/Tab - расширенное окно при бое и привале.");
+    section("Кузница", "Улучшает оружие, броню и реликвии на один уровень (до 4-го). Зелья не улучшаются; цена скидывается до -20%, пока жив Сейдмард.");
+    EndScissorMode();
+    // Подстраиваем прокрутку: можно листать до конца контента, но не выше начала.
+    const float maxScroll = std::max(0.f, y - (top + 30.f));
+    guideScroll_ = std::clamp(guideScroll_, 0.f, maxScroll);
+    if (maxScroll > 0.f) {
+        const int barX = leftX + leftW - 5, barH = visibleH - 4;
+        DrawRectangle(barX, visibleTop + 2, 5, barH, Color{30, 30, 34, 255});
+        const int knobH = std::max(8, barH / 4);
+        const float frac = guideScroll_ / maxScroll;
+        const int knobY = visibleTop + 2 + static_cast<int>(frac * (barH - knobH));
+        DrawRectangle(barX - 1, knobY, 7, knobH, kAccent);
+    }
 
     // ---- правая колонка: герои
     drawText("ГЕРОИ", rightX + 16.f, top + 10.f, 19, kAccent);
@@ -1951,14 +2114,14 @@ void Game::drawGuide() {
         DrawRectangle(row.x, row.y, row.w, row.h, i % 2 == 0 ? Color{31, 33, 44, 235} : Color{27, 29, 39, 235});
         drawIconBox(heroArt(e.role), "", roleColor(e.role), firstGlyph(e.name),
                     static_cast<float>(row.x + 8), static_cast<float>(row.y + 8), 30.f);
-        drawText(e.name, static_cast<float>(row.x + 48), static_cast<float>(row.y + 3), 15, roleColor(e.role));
-        drawText(e.title, static_cast<float>(row.x + 48 + static_cast<int>(textWidth(e.name, 15.f)) + 10),
-                 static_cast<float>(row.y + 6), 12, kDim);
-        drawText(e.feature, static_cast<float>(row.x + 48), static_cast<float>(row.y + 23), 12, kText);
+        drawText(e.name, static_cast<float>(row.x + 48), static_cast<float>(row.y + 3), 16, roleColor(e.role));
+        drawText(e.title, static_cast<float>(row.x + 48 + static_cast<int>(textWidth(e.name, 16.f)) + 10),
+                 static_cast<float>(row.y + 6), 13, kDim);
+        drawText(e.feature, static_cast<float>(row.x + 48), static_cast<float>(row.y + 24), 13, kText);
         ry += 50.f;
     }
 
-    drawTextCentered("Esc - назад в меню", kScreenW / 2.f, 644.f, 13, kDim);
+    drawTextCentered("Esc - назад в меню  (стрелки / колесо - вниз)", kScreenW / 2.f, 644.f, 14, kDim);
     drawButton(kBackBtn.x, kBackBtn.y, kBackBtn.w, kBackBtn.h, "Назад", false, true);
 }
 
@@ -2728,7 +2891,7 @@ void Game::drawBossReward() {
 void Game::drawForge() {
     const Vector2 m = mouse();
     const Color bronze = roomColor(RoomType::Forge);
-    const auto& bag = run_->party().bag;
+    auto& bag = run_->partyMutable().bag;
     drawBackground("backgrounds/arena.png", kGridX, kGridY, kArenaW, kArenaH);
     DrawRectangle(kGridX, kGridY, kArenaW, kArenaH,
                   tex("backgrounds/arena.png") ? Color{18, 12, 8, 170} : Color{28, 22, 18, 255});
@@ -2740,6 +2903,15 @@ void Game::drawForge() {
     drawText(fmt("Монеты: %d", run_->party().coins), kGridX + 574.f, kGridY + 18.f, 22, kCoin);
     if (run_->hasLivingSeidmard())
         drawText("Сейдмард: скидка 20% на улучшение.", kGridX + 430.f, kGridY + 66.f, 14, roleColor(Role::Seidmard));
+
+    // Уникальное оружие из событий можно очистить от отрицательных свойств (E).
+    bool hasEventPenalty = false;
+    for (const Item& it : bag) hasEventPenalty |= it.eventPenaltyAtk != 0 || it.eventPenaltyDef != 0;
+    for (const Hero& h : run_->party().heroes)
+        for (const auto* slot : {&h.weapon, &h.armor})
+            if (*slot) hasEventPenalty |= (*slot)->eventPenaltyAtk != 0 || (*slot)->eventPenaltyDef != 0;
+    if (hasEventPenalty)
+        drawTextCentered("E - снять отрицательные свойства (-5 монет)", kScreenW / 2.f, 76.f, 15, kCoin);
 
     // ---- слева: рюкзак. Цена прямо на ячейке, чтобы не нужно было наводить курсор.
     drawText(fmt("РЮКЗАК (%d/%d)", static_cast<int>(bag.size()), kBagCells),
@@ -2940,8 +3112,16 @@ void Game::drawRunView() {
 
     drawText(fmt("Рюкзак: %d предм.   Зелий: %d   Монеты: %d   [I] - инвентарь", static_cast<int>(r.party().bag.size()),
                  r.party().potionCount(), r.party().coins), kGridX, kCardY - 14.f, 16, r.hasNewLoot() ? kAccent : kDim);
-    if (exploring && r.inShopRoom()) drawText("Торговец рядом: T - торговать", kGridX, kCardY - 34.f, 16, kCoin);
-    if (exploring && r.inForgeRoom()) drawText("Кузница рядом: G - улучшить предмет", kGridX, kCardY - 54.f, 16, roomColor(RoomType::Forge));
+
+    // Постоянная подсказка по клавишам: W/A/S/D шаг, I инвентарь, T торговать, G кузница, Esc меню.
+    {
+        std::string keys = "WASD - шаг; I - инвентарь; Esc - меню";
+        if (exploring && r.inShopRoom()) keys += "; T - торговать";
+        if (exploring && r.inForgeRoom()) keys += "; G - кузница";
+        drawTextCentered(keys, kScreenW / 2.f, kCardY - 34.f, 15, kDim);
+    }
+    if (exploring && r.dungeon().hasShop() && !r.dungeon().shopConnected())
+        drawTextCentered("Торговец стоит, но не подключён: стыкуете комнаты (клетка у края) и вход.", kScreenW / 2.f, kCardY - 46.f, 15, kBad);
     float lx = kGridX, ly = kCardY + 10.f;
     int shown = 0;
     drawText("Недавняя добыча:", lx, ly, 14, kDim);
@@ -2960,6 +3140,7 @@ void Game::drawRunView() {
 
     if (r.combat()) drawArena();
     if (r.phase() == RunPhase::RestChoice) drawRestOverlay();
+    else if (r.phase() == RunPhase::EventChoice) drawEventChoice();
     else if (invOpen_) drawInventory();
     else if (r.phase() == RunPhase::BossIntro) drawBossIntro();
     else if (r.phase() == RunPhase::Shop) drawShop();
@@ -2969,8 +3150,7 @@ void Game::drawRunView() {
     DrawRectangle(kPanelX - 10, 10, kPanelW + 20, kScreenH - 20, kPanel);
     float y = 20;
     drawText("ПОХОД ОТРЯДА", kPanelX, y, 26, kAccent);
-    if (r.phase() == RunPhase::Fighting)
-        drawText(paused_ ? "ПАУЗА" : fmt("скорость боя x%.1f", kSpeeds[speedIdx_]), kPanelX + 290.f, y + 6.f, 16, kDim);
+    if (r.phase() == RunPhase::Fighting && paused_) drawText("ПАУЗА", kPanelX + 290.f, y + 6.f, 16, kDim);
     y += 40;
 
     for (const Hero& h : r.party().heroes) {
@@ -2980,6 +3160,9 @@ void Game::drawRunView() {
         drawBar(kPanelX, static_cast<int>(y) + 22, 300, 8, h.maxHp ? static_cast<float>(h.hp) / h.maxHp : 0.f, kGood);
         y += 40;
     }
+    // Скорость боя показывается всегда: клавиши ↑/↓ меняют её вне боя.
+    if (r.phase() == RunPhase::Fighting || speedIdx_ != 0)
+        drawText(fmt("Бой x%.1f  (↑/↓)", kSpeeds[speedIdx_]), kPanelX + 290.f, 30.f, 16, kDim);
     y += 2;
     drawCoin(kPanelX + 8.f, y + 11.f, 8.f);
     drawText(fmt("Монеты: %d", r.party().coins), kPanelX + 22.f, y + 1.f, 18, kCoin);
@@ -3004,6 +3187,7 @@ void Game::drawRunView() {
     }
 
     const char* hint = r.phase() == RunPhase::Fighting ? "Пробел - пауза   Вверх/Вниз - скорость боя   Esc - меню"
+                  : r.phase() == RunPhase::EventChoice ? "Выбери вариант события цифрой или кликом"
                   : r.phase() == RunPhase::ForgeChoice ? "Выбери вещь - улучшить   Enter - подтвердить   Esc - уйти   I - инвентарь"
                   : r.phase() == RunPhase::BossReward ? "Выбери награду, затем следующий этаж или конец забега   I - инвентарь"
                   : "WASD - идти   I - инвентарь   T - торговец   G - кузница   Esc - меню";
