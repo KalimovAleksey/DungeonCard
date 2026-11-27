@@ -26,6 +26,7 @@ constexpr int kCardY = 600;
 constexpr float kCombatStep = 0.70f;
 constexpr float kSpeeds[] = {0.5f, 1.f, 2.f, 4.f, 10.f};
 constexpr float kMoveCooldown = 0.16f;
+constexpr float kDisplayFadeTime = 0.18f;  // затемнение/проявление при смене разрешения
 
 constexpr float kLungeDur = 0.45f;
 constexpr float kProjDur = 0.40f;
@@ -200,7 +201,13 @@ Game::Game() {
             break;
         }
     }
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_HIGHDPI);  // физические пиксели, без ДПИ-масштабирования Windows
+    // Без FLAG_WINDOW_HIGHDPI: raylib держит screen == framebuffer без
+    // дополнительного DPI-преобразования.
+    // Fullscreen делаем без смены видеорежима монитора (безразличный окно на весь
+    // экран): не дёргается окно и нет щелчка реле при запуске/смене разрешения.
+    unsigned int flags = FLAG_WINDOW_RESIZABLE;
+    if (settings_.fullscreen) flags |= FLAG_WINDOW_UNDECORATED | FLAG_WINDOW_TOPMOST;
+    SetConfigFlags(flags);
     InitWindow(settings_.width, settings_.height, "Dungeon Cards - prototype");
     SetExitKey(KEY_NULL);  // Esc открывает меню, а не закрывает игру
     SetTargetFPS(60);
@@ -275,6 +282,11 @@ void Game::run() {
         DrawTexturePro(target_.texture, Rectangle{0.f, 0.f, static_cast<float>(targetW_), -static_cast<float>(targetH_)},
                        Rectangle{ox, oy, kScreenW * sx, kScreenH * sy},
                        Vector2{0.f, 0.f}, 0.f, Color{255, 255, 255, 255});
+        if (displayFade_ > 0.f) {
+            const int a = static_cast<int>(std::clamp(displayFade_, 0.f, 1.f) * 255.f);
+            DrawRectangle(0, 0, GetRenderWidth(), GetRenderHeight(),
+                          Color{0, 0, 0, static_cast<unsigned char>(a)});
+        }
         EndDrawing();
     }
 }
@@ -333,50 +345,70 @@ void Game::buildResolutionList() {
 }
 
 void Game::applyDisplay() {
-    const bool fs = IsWindowFullscreen();
+    // Полноэкранный режим = безрамочное окно на весь монитор. Мы НЕ меняем
+    // видеорежим монитора: поэтому нет щелчка/дёрганья при запуске и смене
+    // разрешения. Разрешение меняет только внутренний буфер отрисовки.
+    const int mon = GetCurrentMonitor();
+    const int mw = GetMonitorWidth(mon), mh = GetMonitorHeight(mon);
+    const Vector2 mp = GetMonitorPosition(mon);
+
     if (settings_.fullscreen) {
-        if (!fs) {
-            // ToggleFullscreen берёт текущий размер окна как размер полноэкранного режима.
-            SetWindowSize(settings_.width, settings_.height);
-            ToggleFullscreen();
-        }
+        SetWindowState(FLAG_WINDOW_UNDECORATED | FLAG_WINDOW_TOPMOST);
+        SetWindowSize(mw, mh);
+        SetWindowPosition(static_cast<int>(mp.x), static_cast<int>(mp.y));
     } else {
-        if (fs) ToggleFullscreen();
+        ClearWindowState(FLAG_WINDOW_UNDECORATED | FLAG_WINDOW_TOPMOST);
         SetWindowSize(settings_.width, settings_.height);
-        const int mon = GetCurrentMonitor();
-        const int px = (GetMonitorWidth(mon) - settings_.width) / 2;
-        const int py = (GetMonitorHeight(mon) - settings_.height) / 2;
-        SetWindowPosition(std::max(0, px), std::max(0, py));
+        const int px = mp.x + (mw - settings_.width) / 2;
+        const int py = mp.y + (mh - settings_.height) / 2;
+        SetWindowPosition(std::max(static_cast<int>(mp.x), px),
+                          std::max(static_cast<int>(mp.y), py));
     }
     saveSettings();
 }
 
+void Game::requestDisplayChange() {
+    // Менять режим сразу нельзя: на полсекунды закрываем экран чёрным,
+    // применяем изменение и только потом проявляем картинку.
+    if (displayFadeDir_ != 0 || displayChangePending_) return;
+    displayChangePending_ = true;
+    displayFadeDir_ = +1;
+}
+
 void Game::syncRenderTarget() {
-    // Рисуем буфер в физических пикселях окна: текст не растягивается фильтром.
     const float rw = static_cast<float>(GetRenderWidth()), rh = static_cast<float>(GetRenderHeight());
     if (rw <= 0.f || rh <= 0.f) return;
-    const float fit = std::min(rw / kScreenW, rh / kScreenH);
-    const int tw = std::max(1, static_cast<int>(std::floor(kScreenW * fit + 0.5f)));
-    const int th = std::max(1, static_cast<int>(std::floor(kScreenH * fit + 0.5f)));
+    int tw, th;
+    if (settings_.fullscreen) {
+        // В fullscreen окно занимает весь монитор, а разрешение задаёт именно
+        // внутренний буфер - смена идёт без видеорежима и без дёрганья окна.
+        tw = std::max(1, settings_.width);
+        th = std::max(1, settings_.height);
+    } else {
+        // В окне рисуем в физических пикселях: текст остаётся чётким.
+        const float fit = std::min(rw / kScreenW, rh / kScreenH);
+        tw = std::max(1, static_cast<int>(std::floor(kScreenW * fit + 0.5f)));
+        th = std::max(1, static_cast<int>(std::floor(kScreenH * fit + 0.5f)));
+    }
     if (tw == targetW_ && th == targetH_) return;
     if (target_.id != 0) UnloadRenderTexture(target_);
     target_ = LoadRenderTexture(tw, th);
     SetTextureFilter(target_.texture, TEXTURE_FILTER_BILINEAR);
     targetW_ = tw;
     targetH_ = th;
-    targetScale_ = fit;
+    targetScale_ = rw / static_cast<float>(kScreenW);
 }
 
 void Game::viewTransform(float& sx, float& sy, float& ox, float& oy) const {
-    const float sw = static_cast<float>(GetScreenWidth()), sh = static_cast<float>(GetScreenHeight());
+    // Масштабируем буфер до framebuffer с сохранением пропорций. Размер самого
+    // буфера при этом не важен - так смена разрешения не двигает картинку.
     const float rw = std::max(1.f, static_cast<float>(GetRenderWidth()));
     const float rh = std::max(1.f, static_cast<float>(GetRenderHeight()));
-    // Переводим физический размер буфера обратно в логические координаты окна.
-    const float dw = targetW_ * sw / rw, dh = targetH_ * sh / rh;
-    sx = dw / kScreenW;
-    sy = dh / kScreenH;
-    ox = (sw - dw) / 2.f;
-    oy = (sh - dh) / 2.f;
+    const float fit = std::min(rw / static_cast<float>(kScreenW), rh / static_cast<float>(kScreenH));
+    sx = fit;
+    sy = fit;
+    ox = (rw - kScreenW * fit) / 2.f;
+    oy = (rh - kScreenH * fit) / 2.f;
 }
 
 void Game::beginScissor(int x, int y, int w, int h) const {
@@ -596,6 +628,25 @@ void Game::afterBuildAction() {
 // ------------------------------------------------------------------- update
 
 void Game::update(float dt) {
+    // Плавный переход между разрешениями: затемнение -> смена режима -> проявление.
+    if (displayFadeDir_ > 0) {
+        displayFade_ = std::min(1.f, displayFade_ + dt / kDisplayFadeTime);
+        if (displayFade_ >= 1.f) {
+            displayFadeDir_ = 0;
+            if (displayChangePending_) {
+                displayChangePending_ = false;
+                applyDisplay();
+                displayFadeDir_ = -1;
+            }
+        }
+    } else if (displayFadeDir_ < 0) {
+        displayFade_ = std::max(0.f, displayFade_ - dt / kDisplayFadeTime);
+        if (displayFade_ <= 0.f) {
+            displayFade_ = 0.f;
+            displayFadeDir_ = 0;
+        }
+    }
+
     if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_L)) {
         devOpen_ = !devOpen_;
         devMsg_ = devOpen_ ? "Режим разработчика включён." : "";
@@ -793,6 +844,7 @@ void Game::updatePause() {
 }
 
 void Game::updateSettings() {
+    if (displayFadeDir_ != 0 || displayChangePending_) return;  // переход уже идёт
     const Vector2 m = mouse();
     if (!IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) return;
     const int n = static_cast<int>(resolutions_.size());
@@ -800,15 +852,15 @@ void Game::updateSettings() {
         if (!inR(m, resBtn(i))) continue;
         settings_.width = resolutions_[i].w;
         settings_.height = resolutions_[i].h;
-        settings_.fullscreen = false;  // выбор разрешения возвращает оконный режим
+        // Fullscreen сохраняем: смена режима пройдёт с затемнением.
         settings_.customResolution = true;
-        applyDisplay();
+        requestDisplayChange();
         return;
     }
     if (inRect(m, 440, 190 + n * 58 + 14, 400, 48)) {
         settings_.fullscreen = !settings_.fullscreen;
         settings_.customResolution = true;
-        applyDisplay();
+        requestDisplayChange();
     } else if (inRect(m, 440, 190 + n * 58 + 84, 400, 48)) {
         screen_ = settingsBack_;
     }
@@ -2037,7 +2089,7 @@ void Game::drawMainMenu() {
     }
     drawTextCentered(fmt("Побед: %d из %d забегов.   Победа над боссом: +%d артефакта.", profile_.wins, profile_.runs, kBossArtifacts),
                      kScreenW / 2.f, 662.f, 15, kDim);
-    drawTextCentered(fmt("Окно: %dx%d%s", GetScreenWidth(), GetScreenHeight(), IsWindowFullscreen() ? " (полный экран)" : ""),
+    drawTextCentered(fmt("Окно: %dx%d%s", GetScreenWidth(), GetScreenHeight(), settings_.fullscreen ? " (полный экран)" : ""),
                      kScreenW / 2.f, 686.f, 15, kDim);
 }
 
@@ -2253,15 +2305,18 @@ void Game::drawSettings() {
     const int n = static_cast<int>(resolutions_.size());
     for (int i = 0; i < n; ++i) {
         const R r = resBtn(i);
-        const bool cur = !settings_.fullscreen && settings_.width == resolutions_[i].w && settings_.height == resolutions_[i].h;
+        const bool cur = settings_.width == resolutions_[i].w && settings_.height == resolutions_[i].h;
         drawButton(r.x, r.y, r.w, r.h,
                    fmt("%d x %d%s%s", resolutions_[i].w, resolutions_[i].h,
                        i == 0 ? "  (родное)" : "", cur ? "  (текущее)" : ""), cur, true);
     }
     drawButton(440, 190 + n * 58 + 14, 400, 48, settings_.fullscreen ? "Полный экран: ВКЛ" : "Полный экран: ВЫКЛ", settings_.fullscreen, true);
     drawButton(440, 190 + n * 58 + 84, 400, 48, "Назад", false, true);
-    drawTextCentered(fmt("Текущее окно: %dx%d", GetScreenWidth(), GetScreenHeight()), kScreenW / 2.f, 628.f, 16, kDim);
-    drawTextCentered("Интерфейс масштабируется под окно. Окно можно растягивать мышью. Esc - назад.", kScreenW / 2.f, 654.f, 15, kDim);
+    drawTextCentered(fmt("Окно: %dx%d    Рендер: %dx%d",
+                         GetScreenWidth(), GetScreenHeight(), settings_.width, settings_.height),
+                     kScreenW / 2.f, 628.f, 16, kDim);
+    drawTextCentered("Полный экран без смены режима монитора. Разрешение меняет буфер отрисовки. Esc - назад.",
+                     kScreenW / 2.f, 654.f, 15, kDim);
 }
 
 // ----------------------------------------------------------- карточка босса
