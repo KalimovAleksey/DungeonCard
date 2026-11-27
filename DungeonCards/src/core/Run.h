@@ -44,6 +44,8 @@ public:
     static constexpr int kRestHealPct = kBaseRestHealPct;  // лечение на привале (без улучшений)
     static constexpr int kBuffAtk = 3;       // бафф на привале
     static constexpr int kBuffDef = 1;
+    static constexpr int kMonkBuffAtk = 4;   // Монах не носит оружие/броню, тренировка компенсирует
+    static constexpr int kMonkBuffDef = 2;
     static constexpr int kBuffTargets = 2;
     static constexpr int kReviveCost = kBaseReviveCost;    // полная цена воскрешения за монеты (без улучшений)
     static constexpr int kReviveArtifactCost = 2;          // полная цена воскрешения за артефакты

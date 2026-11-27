@@ -81,6 +81,7 @@ Color roleColor(Role r) {
         case Role::Druid:     return {80, 185, 115, 255};
         case Role::Bard:      return {225, 130, 210, 255};
         case Role::Seidmard:  return {150, 115, 235, 255};
+        case Role::Monk:      return {215, 200, 150, 255};
     }
     return kDim;
 }
@@ -161,6 +162,20 @@ R slotRect(int i, int k) {
     R p = heroPanel(i);
     return {p.x + 8 + k * 54, p.y + 62, 50, 50};
 }
+// Монах носит только реликвию: две остальные ячейки показаны закрытыми.
+bool slotLocked(const Hero& h, ItemKind k) {
+    return h.role == Role::Monk && (k == ItemKind::Weapon || k == ItemKind::Armor);
+}
+int restAtkBonus(const Hero& h) { return h.role == Role::Monk ? Run::kMonkBuffAtk : Run::kBuffAtk; }
+int restDefBonus(const Hero& h) { return h.role == Role::Monk ? Run::kMonkBuffDef : Run::kBuffDef; }
+
+// Кнопки вариантов (стоек) внутри карточки героя на экране выбора.
+R variantRect(int cardX, int cardY, int k, int count) {
+    constexpr int bw = 86, gap = 8;
+    const int total = count * bw + (count - 1) * gap;
+    return {cardX + (kSelCardW - total) / 2 + k * (bw + gap), cardY + 176, bw, 28};
+}
+
 R restockButton() { return {kGridX + 290, kGridY + 10, 260, 36}; }
 R sellButton() { return {kGridX + 430, kGridY + 10, 290, 34}; }
 
@@ -436,6 +451,19 @@ void Game::saveProfile() const { profile_.saveFile(profilePath_); }
 void Game::refreshRoster() {
     roster_ = heroRoster();
     for (auto& h : roster_) profile_.meta.applyToHero(h);
+    // Между этажами отряд берётся из Run, а карточки пересоздаются заново:
+    // переносим выбранную стойку, чтобы она не сбрасывалась на Ветер.
+    if (run_) {
+        const auto& keptHeroes = run_->party().heroes;
+        for (auto& h : roster_) {
+            for (const auto& kept : keptHeroes) {
+                if (kept.role == h.role && kept.name == h.name) {
+                    setHeroVariant(h, heroVariant(kept));
+                    break;
+                }
+            }
+        }
+    }
 }
 
 // Итог забега: за победу над боссом - артефакты, плюс награды за новые достижения.
@@ -897,13 +925,28 @@ void Game::updateSelect() {
     selScroll_ += (selScrollTarget_ - selScroll_) * 15.f * GetFrameTime();
     if (std::abs(selScroll_ - selScrollTarget_) < 0.5f) selScroll_ = selScrollTarget_;
 
-    const int keys[kMaxRoster] = {KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR, KEY_FIVE, KEY_SIX, KEY_SEVEN, KEY_EIGHT, KEY_NINE, KEY_ZERO};
+    const int keys[kMaxRoster] = {KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR, KEY_FIVE, KEY_SIX,
+                                  KEY_SEVEN, KEY_EIGHT, KEY_NINE, KEY_ZERO, KEY_MINUS};
     Vector2 m = mouse();
     bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     if (currentFloor_ == 1) {
         for (int i = 0; i < static_cast<int>(roster_.size()) && i < kMaxRoster; ++i) {
             int x = kSelX + (i % 4) * (kSelCardW + kSelGap);
             int y = static_cast<int>(kSelY + (i / 4) * (kSelCardH + kSelGap) - selScroll_);
+
+            // Кнопки вариантов (пока только стойки Монаха) обрабатываем раньше,
+            // чем клик по всей карточке, иначе выбор стойки снимал бы героя.
+            bool variantClicked = false;
+            const auto variants = heroVariants(roster_[i].role);
+            for (int v = 0; v < static_cast<int>(variants.size()); ++v) {
+                const R r = variantRect(x, y, v, static_cast<int>(variants.size()));
+                if (!click || !inRect(m, r.x, r.y, r.w, r.h)) continue;
+                setHeroVariant(roster_[i], variants[v].id);
+                setMessage("", false);
+                variantClicked = true;
+                break;
+            }
+            if (variantClicked) continue;
 
             bool toggle = IsKeyPressed(keys[i]) || (click && inRect(m, x, y, kSelCardW, kSelCardH));
             if (!toggle) continue;
@@ -1591,6 +1634,8 @@ void Game::updateInventory() {
                 const Item it = p.bag[invSel_];
                 if (it.kind != kSlotKinds[k]) {
                     invMsg_ = fmt("Это %s - ему нужен другой слот.", itemKindName(it.kind));
+                } else if (slotLocked(p.heroes[h], kSlotKinds[k])) {
+                    invMsg_ = "Монах не носит оружие и броню - только реликвию.";
                 } else if (run_->equipItem(invSel_, h)) {
                     invSel_ = -1;
                     invMsg_ = "Надето.";
@@ -1872,7 +1917,8 @@ void Game::drawBagCell(int x, int y, int size, const Item* it, bool selected, bo
 }
 
 // Ячейка снаряжения героя: надетый предмет или значок пустого слота.
-void Game::drawEquipSlot(int x, int y, int size, ItemKind kind, const std::optional<Item>& item, bool fits, bool hover) const {
+void Game::drawEquipSlot(int x, int y, int size, ItemKind kind, const std::optional<Item>& item,
+                         bool fits, bool hover, bool locked) const {
     const float fx = static_cast<float>(x), fy = static_cast<float>(y), fs = static_cast<float>(size);
     if (!drawArt("ui/slot.png", fx, fy, fs, fs)) DrawRectangle(x, y, size, size, hover ? Color{44, 46, 60, 255} : Color{36, 38, 50, 255});
     if (item) {
@@ -1885,8 +1931,13 @@ void Game::drawEquipSlot(int x, int y, int size, ItemKind kind, const std::optio
             drawTextCentered(kind == ItemKind::Weapon ? "Оруж." : kind == ItemKind::Armor ? "Броня" : "Релик.", fx + fs / 2.f, fy + fs / 2.f - 7.f, 12, kDim);
         }
     }
-    DrawRectangleLines(x, y, size, size, fits ? kGood : hover ? kAccent : (item ? tierColor(item->tier) : kGridLine));
-    if (fits) DrawRectangleLines(x + 1, y + 1, size - 2, size - 2, kGood);
+    if (locked) {
+        DrawRectangle(x, y, size, size, {18, 18, 22, 200});
+        drawTextCentered("ЗАКР.", fx + fs / 2.f, fy + fs / 2.f - 7.f, 11, kBad);
+    }
+    DrawRectangleLines(x, y, size, size,
+                       locked ? kBad : fits ? kGood : hover ? kAccent : (item ? tierColor(item->tier) : kGridLine));
+    if (fits && !locked) DrawRectangleLines(x + 1, y + 1, size - 2, size - 2, kGood);
 }
 
 // Всплывающая подсказка у курсора.
@@ -2147,7 +2198,7 @@ void Game::drawGuide() {
     // ---- правая колонка: герои
     drawText("ГЕРОИ", rightX + 16.f, top + 10.f, 19, kAccent);
     struct Entry { Role role; const char* name; const char* title; const char* feature; };
-    static const Entry entries[10] = {
+    static const Entry entries[11] = {
         {Role::Warrior,   "Воин",     "Танк",           "Провокация: враги выбирают его в 3 раза чаще."},
         {Role::Mage,      "Маг",      "Магия",          "Игнорирует половину ЗАЩ; каждые 3-й удар - взрыв по всем."},
         {Role::Cleric,    "Жрица",    "Лекарь",         "Лечит самого раненого союзника, если тот ниже 60% ЗДР."},
@@ -2158,19 +2209,20 @@ void Game::drawGuide() {
         {Role::Druid,     "Друид",    "Лекарь группы",  "Цепное лечение 6/5/4/3 + половина его ЗАЩ."},
         {Role::Bard,      "Бард",     "Вдохновитель",   "Усиливает сильнейшего союзника; -15% у торговца."},
         {Role::Seidmard,  "Сейдмард", "Руны",           "-2 ЗАЩ с врага (до -6) для всех; -20% в кузнице."},
+        {Role::Monk,      "Монах",    "3 стойки",       "Без оружия/брони; Ветер отражает, Молния бьёт цепью, Земля защищает."},
     };
-    float ry = top + 36.f;
-    for (int i = 0; i < 10; ++i) {
+    float ry = top + 30.f;
+    for (int i = 0; i < 11; ++i) {
         const Entry& e = entries[i];
-        const R row{rightX + 10, static_cast<int>(ry), rightW - 20, 47};
+        const R row{rightX + 10, static_cast<int>(ry), rightW - 20, 42};
         DrawRectangle(row.x, row.y, row.w, row.h, i % 2 == 0 ? Color{31, 33, 44, 235} : Color{27, 29, 39, 235});
         drawIconBox(heroArt(e.role), "", roleColor(e.role), firstGlyph(e.name),
-                    static_cast<float>(row.x + 8), static_cast<float>(row.y + 8), 30.f);
-        drawText(e.name, static_cast<float>(row.x + 48), static_cast<float>(row.y + 3), 16, roleColor(e.role));
-        drawText(e.title, static_cast<float>(row.x + 48 + static_cast<int>(textWidth(e.name, 16.f)) + 10),
-                 static_cast<float>(row.y + 6), 13, kDim);
-        drawText(e.feature, static_cast<float>(row.x + 48), static_cast<float>(row.y + 24), 13, kText);
-        ry += 50.f;
+                    static_cast<float>(row.x + 8), static_cast<float>(row.y + 6), 28.f);
+        drawText(e.name, static_cast<float>(row.x + 44), static_cast<float>(row.y + 2), 15, roleColor(e.role));
+        drawText(e.title, static_cast<float>(row.x + 44 + static_cast<int>(textWidth(e.name, 15.f)) + 8),
+                 static_cast<float>(row.y + 4), 12, kDim);
+        drawText(e.feature, static_cast<float>(row.x + 44), static_cast<float>(row.y + 21), 12, kText);
+        ry += 45.f;
     }
 
     drawTextCentered("Esc - назад в меню  (стрелки / колесо - вниз)", kScreenW / 2.f, 644.f, 14, kDim);
@@ -2361,7 +2413,7 @@ void Game::drawBossIntro() {
 void Game::drawSelect() {
     drawText("ВЫБОР ОТРЯДА", kSelX, 20, 32, kAccent);
     if (currentFloor_ == 1) {
-        drawText("Выбери четырёх героев (клик или 1-9) и одного из трёх боссов (Q/W/E). Enter - начать. Состав решает исход боя!",
+        drawText("Выбери четырёх героев (клик или 1-9, 0, -) и босса (Q/W/E). У Монаха - кнопки стойки на карточке. Enter - начать.",
                  kSelX, 60, 16, kDim);
     } else {
         drawText(fmt("ЭТАЖ %d. Выбери следующего босса (Q/W/E). Отряд сохраняется с прошлого этажа.", currentFloor_),
@@ -2410,12 +2462,34 @@ void Game::drawSelect() {
             drawText(fmt("%d", vals[k]), x + 232.f, static_cast<float>(ry), 16, kText);
         }
 
-        float ay = static_cast<float>(y + 176);
-        int lines = 0;
-        for (const auto& l : wrap(roleAbility(h.role), kSelCardW - 36.f, 15)) {
-            if (lines++ >= 4) break;
-            drawText(l, static_cast<float>(x + 20), ay, 15, kText);
-            ay += 18;
+        const auto variants = heroVariants(h.role);
+        if (!variants.empty()) {
+            // Универсальные кнопки вариантов: сейчас это три стойки Монаха.
+            const int current = heroVariant(h);
+            for (int v = 0; v < static_cast<int>(variants.size()); ++v) {
+                const R r = variantRect(x, y, v, static_cast<int>(variants.size()));
+                const bool sel = v == current;
+                const bool hov = currentFloor_ == 1 && inRect(m, r.x, r.y, r.w, r.h);
+                DrawRectangle(r.x, r.y, r.w, r.h,
+                              sel ? Color{46, 58, 50, 255} : hov ? Color{52, 56, 74, 255} : Color{32, 34, 44, 255});
+                DrawRectangleLines(r.x, r.y, r.w, r.h, sel ? kGood : hov ? kAccent : kGridLine);
+                drawTextCentered(variants[v].label, r.x + r.w / 2.f, r.y + 6.f, 14, sel ? kGood : kText);
+            }
+            float dy = static_cast<float>(y + 210);
+            int descLines = 0;
+            for (const auto& l : wrap(variants[current].desc, kSelCardW - 36.f, 12)) {
+                if (descLines++ >= 2) break;
+                drawText(l, static_cast<float>(x + 20), dy, 12, kDim);
+                dy += 14.f;
+            }
+        } else {
+            float ay = static_cast<float>(y + 176);
+            int lines = 0;
+            for (const auto& l : wrap(roleAbility(h.role), kSelCardW - 36.f, 15)) {
+                if (lines++ >= 4) break;
+                drawText(l, static_cast<float>(x + 20), ay, 15, kText);
+                ay += 18;
+            }
         }
         if (ch) drawText("ВЫБРАН", x + kSelCardW - 92.f, y + 40.f, 16, kGood);
         if (currentFloor_ > 1) {
@@ -2704,7 +2778,8 @@ void Game::drawRestOverlay() {
         const char* titles[3] = {"[1] Лечение", "[2] Усиление", "[3] Воскрешение"};
         const std::string descs[3] = {
             fmt("Все живые герои восстанавливают %d%% максимального здоровья.", run_->restHealPct()),
-            fmt("Выбери двух героев: каждый получит +%d АТК и +%d ЗАЩ до конца похода.", Run::kBuffAtk, Run::kBuffDef),
+            fmt("Выбери двух героев: +%d АТК и +%d ЗАЩ до конца похода. Монах тренируется усерднее: +%d/%d.",
+                Run::kBuffAtk, Run::kBuffDef, Run::kMonkBuffAtk, Run::kMonkBuffDef),
             fmt("Бесплатный шанс: %d%%. Гарантия: %d монет или %d артефакта. Можно повторять.",
                 run_->reviveChancePct(), run_->reviveCoinCost(), run_->reviveArtifactCost())};
         const Color titleCols[3] = {kHeal, kAccent, kCoin};
@@ -2810,8 +2885,8 @@ void Game::drawRestOverlay() {
             drawText("пал - усилить нельзя", static_cast<float>(rx + 74), static_cast<float>(ry + 40), 16, kDim);
             continue;
         }
-        drawText(fmt("АТК %d -> %d    ЗАЩ %d -> %d    ЗДР %d/%d", h.atk, h.atk + Run::kBuffAtk, h.def,
-                     h.def + Run::kBuffDef, h.hp, h.maxHp),
+        drawText(fmt("АТК %d -> %d    ЗАЩ %d -> %d    ЗДР %d/%d", h.atk, h.atk + restAtkBonus(h), h.def,
+                     h.def + restDefBonus(h), h.hp, h.maxHp),
                  static_cast<float>(rx + 74), static_cast<float>(ry + 40), 16, restPick_[i] ? kGood : kDim);
     }
     drawTextCentered("Enter - подтвердить    B - назад", cx, kGridY + kArenaH - 36.f, 18, picked == req ? kAccent : kDim);
@@ -2858,10 +2933,11 @@ void Game::drawInventory() {
         for (int k = 0; k < 3; ++k) {
             const R sr = slotRect(h, k);
             const auto& item = hero.slot(kSlotKinds[k]);
-            const bool fits = selItem && selItem->kind == kSlotKinds[k] && hero.alive();
+            const bool locked = slotLocked(hero, kSlotKinds[k]);
+            const bool fits = selItem && selItem->kind == kSlotKinds[k] && hero.alive() && !locked;
             const bool hover = inR(m, sr);
             if (hover && item) hoverItem = &*item;
-            drawEquipSlot(sr.x, sr.y, sr.w, kSlotKinds[k], item, fits, hover);
+            drawEquipSlot(sr.x, sr.y, sr.w, kSlotKinds[k], item, fits, hover, locked);
             if (item) drawText(itemBonusText(*item), pr.x + 184.f, by, 12, tierColor(item->tier));
             else drawText("-", pr.x + 184.f, by, 12, kDim);
             by += 15.f;

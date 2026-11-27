@@ -16,6 +16,7 @@ const char* roleTitle(Role r) {
         case Role::Druid:     return "Лекарь группы";
         case Role::Bard:      return "Вдохновитель";
         case Role::Seidmard:  return "Разрушитель брони";
+        case Role::Monk:      return "Стойкий отшельник";
     }
     return "";
 }
@@ -32,8 +33,54 @@ const char* roleAbility(Role r) {
         case Role::Bard:      return "Вдохновение: усиливает сильнейшего союзника в бою; даёт скидку у торговца.";
         case Role::Mage:      return "Магия: игнорирует половину ЗАЩ; каждый 3-й ход после атаки - арканный взрыв по всем врагам (60% АТК).";
         case Role::Seidmard:  return "Руна: -2 ЗАЩ самому защищённому врагу (до -6) за удар; затем магия 50% АТК. Кузница: -20%.";
+        case Role::Monk:      return "Не носит оружие и броню, но тренировка даёт +4 АТК/+2 ЗАЩ. Стойка меняет роль в бою.";
     }
     return "";
+}
+
+const char* stanceName(Stance s) {
+    switch (s) {
+        case Stance::Wind:      return "Ветер";
+        case Stance::Lightning: return "Молния";
+        case Stance::Earth:     return "Земля";
+    }
+    return "";
+}
+const char* stanceShort(Stance s) {
+    switch (s) {
+        case Stance::Wind:      return "Ветер";
+        case Stance::Lightning: return "Молния";
+        case Stance::Earth:     return "Земля";
+    }
+    return "";
+}
+const char* stanceDesc(Stance s) {
+    switch (s) {
+        case Stance::Wind:      return "35% отражение: урона нет, враг получает столько же. Перо ветра усиливает шанс.";
+        case Stance::Lightning: return "130% АТК по 1-2 целям, магия игнорирует половину ЗАЩ.";
+        case Stance::Earth:     return "+4 ЗАЩ, щит союзнику и 20% урона себе (до 35% ЗДР за раунд). Танк.";
+    }
+    return "";
+}
+
+std::vector<HeroVariant> heroVariants(Role r) {
+    if (r != Role::Monk) return {};
+    std::vector<HeroVariant> out;
+    for (int i = 0; i < 3; ++i) {
+        const Stance s = static_cast<Stance>(i);
+        out.push_back({i, stanceShort(s), stanceDesc(s)});
+    }
+    return out;
+}
+
+int heroVariant(const Hero& h) {
+    return h.role == Role::Monk ? static_cast<int>(h.stance) : 0;
+}
+
+void setHeroVariant(Hero& h, int id) {
+    if (h.role != Role::Monk || id < 0 || id >= 3) return;
+    h.stance = static_cast<Stance>(id);
+    h.recalc();  // Земля даёт +4 ЗАЩ сразу, без ожидания следующего пересчёта
 }
 
 const char* itemKindName(ItemKind k) {
@@ -70,6 +117,8 @@ void Hero::recalc() {
             case RelicEffect::Vampire:  vamp += relic->power; break;
         }
     }
+    // Стойка Земли компенсирует отсутствие брони постоянной +4 ЗАЩ.
+    if (role == Role::Monk && stance == Stance::Earth) defB += 4;
     const int newMax = baseHp + hpB;
     if (alive()) {
         // Текущее здоровье следует за максимальным в обе стороны: надевание предмета
@@ -112,6 +161,9 @@ std::vector<Hero> heroRoster() {
         makeHero("Друид",   Role::Druid,     27, 4, 1, 4),
         makeHero("Бард",    Role::Bard,      29, 6, 2, 4),
         makeHero("Сейдмард", Role::Seidmard,  29, 10, 2, 5),  // стартовые значения после балансировки
+        // База уже включает «виртуальное снаряжение» 2 тира: +3 АТК, +3 ЗАЩ, +6 ЗДР.
+        // Слоты оружия/брони заблокированы, реликвия идёт сверху.
+        makeHero("Монах",    Role::Monk,      40, 10, 5, 5),
     };
 }
 
@@ -311,6 +363,8 @@ bool Party::equipFromBag(int bagIndex, int heroIndex) {
     Hero& h = heroes[heroIndex];
     Item it = bag[bagIndex];
     if (it.kind == ItemKind::Potion || !h.alive()) return false;
+    // Монах сознательно отказывается от оружия и брони: его база уже их компенсирует.
+    if (h.role == Role::Monk && (it.kind == ItemKind::Weapon || it.kind == ItemKind::Armor)) return false;
     bag.erase(bag.begin() + bagIndex);
     std::optional<Item>& s = h.slot(it.kind);
     if (s) bag.push_back(*s);  // старый предмет возвращается в рюкзак

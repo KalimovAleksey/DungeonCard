@@ -12,20 +12,39 @@
 
 using namespace dc;
 
-// индексы в heroRoster(): 0 Воин, 1 Маг, 2 Жрица, 3 Вор, 4 Лучник, 5 Паладин, 6 Берсерк, 7 Друид, 8 Бард, 9 Сейдмард
-static constexpr int kClassCount = static_cast<int>(Role::Seidmard) + 1;
+// Классы симулятора: 0 Воин, 1 Маг, 2 Жрица, 3 Вор, 4 Лучник, 5 Паладин, 6 Берсерк, 7 Друид,
+// 8 Бард, 9 Сейдмард, дальше три отдельные стойки Монаха.
+static constexpr int kBaseClasses = static_cast<int>(Role::Monk);  // 10 обычных ролей до Монаха
+static constexpr int kClassCount = kBaseClasses + 3;               // 13 классов с учётом стоек
+
+static Hero classHero(int cls, const std::vector<Hero>& roster) {
+    Hero h = roster[cls < kBaseClasses ? cls : kBaseClasses];  // все стойки берут одного Монаха из heroRoster()
+    if (cls >= kBaseClasses) setHeroVariant(h, cls - kBaseClasses);
+    return h;
+}
+
+static std::string className(int cls, const std::vector<Hero>& roster) {
+    switch (cls - kBaseClasses) {
+        case 0: return "Монах(ветер)";
+        case 1: return "Монах(молния)";
+        case 2: return "Монах(земля)";
+        default: return cls < kBaseClasses ? roster[cls].name : "?";
+    }
+}
+
 static std::vector<int> smartTeam(int boss) {
-    // пересчитано перебором составов из 10 героев (balance_sim ... search, умные предметы)
-    // для Слизня и Некроманта учтён бонус Лучника против призывов
+    // Составы под каждого босса; теперь представлены все 13 классов,
+    // включая три стойки Монаха, Вора и Барда.
+    // Для Слизня и Некроманта сохранён бонус Лучника против призывов.
     switch (boss) {
-        case BossSlime:    return {0, 2, 4, 9};  // Воин Жрица Лучник Сейдмард
-        case BossDevourer: return {0, 1, 5, 7};  // Воин Маг Паладин Друид
-        case BossKnight:   return {0, 2, 6, 9};  // Воин Жрица Берсерк Сейдмард (антиброня)
-        case BossArchmage: return {0, 1, 4, 6};  // Воин Маг Лучник Берсерк
-        case BossDruid:    return {0, 1, 2, 9};  // Воин Маг Жрица Сейдмард
-        case BossTroll:    return {0, 2, 6, 7};  // Воин Жрица Берсерк Друид
-        case BossNecro:    return {0, 1, 4, 7};  // Воин Маг Лучник Друид
-        default:           return {0, 1, 2, 7};  // дракон: Воин Маг Жрица Друид
+        case BossSlime:    return {0, 2, 4, 8};   // Воин Жрица Лучник Бард
+        case BossDevourer: return {0, 1, 5, 7};   // Воин Маг Паладин Друид
+        case BossKnight:   return {0, 2, 11, 9};  // Воин Жрица Монах(молния) Сейдмард: магия против брони
+        case BossArchmage: return {0, 1, 4, 10};  // Воин Маг Лучник Монах(ветер): отражение по площади
+        case BossDruid:    return {0, 1, 3, 9};   // Воин Маг Вор Сейдмард
+        case BossTroll:    return {0, 2, 12, 7};  // Воин Жрица Монах(земля) Друид
+        case BossNecro:    return {0, 1, 4, 7};   // Воин Маг Лучник Друид
+        default:           return {0, 1, 2, 7};   // дракон: Воин Маг Жрица Друид
     }
 }
 
@@ -41,15 +60,17 @@ static double weight(const Hero& h, const Item& it) {
                 case Role::Warrior: return 2;
                 case Role::Paladin: return 1.5;
                 case Role::Cleric: return 0.6;
+                case Role::Monk: return 0;    // не носит оружие
                 default: return 0.4;
             }
         case ItemKind::Armor:
+            if (r == Role::Monk) return 0;    // не носит броню
             if (r == Role::Paladin || r == Role::Warrior) return 3;
             return r == Role::Berserker ? 1.5 : 1;
         case ItemKind::Relic:
             switch (it.relic) {
                 case RelicEffect::Vitality: return r == Role::Mage ? 3 : isHealer(r) ? 2.5 : r == Role::Archer ? 2 : 1.5;
-                case RelicEffect::Haste:    return isHealer(r) ? 2 : 1;
+                case RelicEffect::Haste:    return (isHealer(r) || r == Role::Monk) ? 2 : 1;  // Монаху усиливает и Молнию, и Ветер
                 case RelicEffect::Keen:
                     return (r == Role::Rogue) ? 3 : (r == Role::Mage || r == Role::Archer || r == Role::Berserker) ? 2.5
                            : r == Role::Warrior ? 1.5 : r == Role::Seidmard ? 2 : 0.8;
@@ -165,7 +186,7 @@ struct Result {
     int cleared = 0;
     bool reachedBoss = false;
     bool shopConnected = false;
-    std::vector<int> roles;      // индексы классов heroRoster() в порядке отряда
+    std::vector<int> roles;      // индексы классов симулятора (включая стойки Монаха) в порядке отряда
     std::vector<bool> survived;  // выжил ли каждый из них к концу забега
 };
 
@@ -215,15 +236,19 @@ static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems,
 
     auto roster = heroRoster();
     std::vector<Hero> squad;
+    std::vector<int> squadClass;
     if (fixedTeam) {
-        for (int i : *fixedTeam) squad.push_back(roster[i]);
+        for (int i : *fixedTeam) { squad.push_back(classHero(i, roster)); squadClass.push_back(i); }
     } else if (smartTeamPick) {
-        for (int i : smartTeam(bossId)) squad.push_back(roster[i]);
+        for (int i : smartTeam(bossId)) { squad.push_back(classHero(i, roster)); squadClass.push_back(i); }
     } else {
         std::vector<int> ids;
-        for (size_t i = 0; i < roster.size(); ++i) ids.push_back(static_cast<int>(i));
+        for (int i = 0; i < kClassCount; ++i) ids.push_back(i);
         rng.shuffle(ids);
-        for (int i = 0; i < 4 && i < static_cast<int>(ids.size()); ++i) squad.push_back(roster[ids[i]]);
+        for (int i = 0; i < 4 && i < static_cast<int>(ids.size()); ++i) {
+            squad.push_back(classHero(ids[i], roster));
+            squadClass.push_back(ids[i]);
+        }
     }
 
     RunOptions options;
@@ -342,8 +367,8 @@ static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems,
     out.cleared = run.roomsCleared();
     out.reachedBoss = reached;
     out.shopConnected = shopConn;
-    for (size_t i = 0; i < squad.size(); ++i) {
-        out.roles.push_back(static_cast<int>(squad[i].role));
+    for (size_t i = 0; i < squad.size() && i < squadClass.size(); ++i) {
+        out.roles.push_back(squadClass[i]);
         out.survived.push_back(i < run.party().heroes.size() && run.party().heroes[i].alive());
     }
     return out;
@@ -355,7 +380,7 @@ static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems,
 static bool bossHasAdds(int boss) { return boss == BossNecro || boss == BossSlime; }
 static constexpr double kArcherAddsBonus = 10.0;
 
-// Перебор всех C(10,4) = 210 составов отряда для каждого босса (умная раздача предметов).
+// Перебор всех C(13,4) = 715 составов отряда для каждого босса (умная раздача предметов).
 static void searchTeams(int games, int policy, int requireRole = -1) {
     auto roster = heroRoster();
     for (int boss = 0; boss < kBossCount; ++boss) {
@@ -383,7 +408,7 @@ static void searchTeams(int games, int policy, int requireRole = -1) {
                         if (score > best) { best = score; bestRaw = pct; bestT = team; }
                         if (pct < worst) { worst = pct; worstT = team; }
                     }
-        auto name = [&](const std::vector<int>& t) { std::string s; for (int i : t) s += roster[i].name + " "; return s; };
+        auto name = [&](const std::vector<int>& t) { std::string s; for (int i : t) s += className(i, roster) + " "; return s; };
         std::printf("%-18s лучший %5.1f%% (оценка %5.1f) [%s] худший %5.1f%% [%s] средний %5.1f%%\n", bossInfo(boss).name.c_str(),
                     bestRaw, best, name(bestT).c_str(), worst, name(worstT).c_str(), sum / n);
         std::string ids;
@@ -416,7 +441,7 @@ static void metaImpact(int games, int policy) {
 
 int main(int argc, char** argv) {
     dc::enableUtf8Console();
-    int games = argc > 1 ? std::atoi(argv[1]) : 1600;
+    int games = argc > 1 ? std::atoi(argv[1]) : 3000;  // партий на ячейку
     int policy = argc > 2 ? std::atoi(argv[2]) : 0;
     if (argc > 3 && std::string(argv[3]) == "search")
     { searchTeams(games, policy, argc > 4 ? std::atoi(argv[4]) : -1); return 0; }
@@ -487,7 +512,7 @@ int main(int argc, char** argv) {
     std::printf("\nПо классам (победы / выжил, %% от забегов с этим классом в отряде):\n");
     struct Row { int cls; double rate[4]; };
     std::vector<Row> rows;
-    for (int cls = 0; cls < kClassCount && cls < static_cast<int>(roster.size()); ++cls) {
+    for (int cls = 0; cls < kClassCount; ++cls) {
         Row row{cls, {-1, -1, -1, -1}};
         for (int c = 0; c < 4; ++c)
             if (classPlayed[c][cls] > 0) row.rate[c] = 100.0 * classWins[c][cls] / classPlayed[c][cls];
@@ -503,15 +528,15 @@ int main(int argc, char** argv) {
         return std::string(buf);
     };
     if (smartOnly) {
-        std::printf("  %s\n", padUtf8("класс", 10).c_str());
+        std::printf("  %s\n", padUtf8("класс", 16).c_str());
         for (const auto& row : rows)
-            std::printf("  %s  %s\n", padUtf8(roster[row.cls].name, 10).c_str(), cell(3, row.cls).c_str());
+            std::printf("  %s  %s\n", padUtf8(className(row.cls, roster), 16).c_str(), cell(3, row.cls).c_str());
     } else {
         const char* heads[5] = {"класс", "наивная", "отряд под босса", "умные предметы", "всё умное"};
-        for (int i = 0; i < 5; ++i) std::printf("  %s", padUtf8(heads[i], i == 0 ? 10 : 16).c_str());
+        for (int i = 0; i < 5; ++i) std::printf("  %s", padUtf8(heads[i], 16).c_str());
         std::printf("\n");
         for (const auto& row : rows) {
-            std::printf("  %s", padUtf8(roster[row.cls].name, 10).c_str());
+            std::printf("  %s", padUtf8(className(row.cls, roster), 16).c_str());
             for (int c = 0; c < 4; ++c) std::printf("  %s", padUtf8(cell(c, row.cls), 16).c_str());
             std::printf("\n");
         }

@@ -91,9 +91,18 @@ private:
     bool anyMinionAlive() const;
     int findBoss(int bossId) const;
     int freeSlot() const;
+    // Пассивки Земли работают, только пока Монах реально в бою: проглоченный
+    // Пожирателем герой не даёт щит и не перераспределяет урон.
+    bool monkGuards(int idx) const;
 
     int heroDamage(const Hero& h, const Enemy& e, int atkValue, bool magic, bool ranged) const;
     int hurtHero(int ei, int target, int dmg, CombatAction& act, std::vector<std::string>& log);
+    // Внутренний удар: щит, перенаправление Земли и отражение Ветра.
+    // allowRedirect=false используется для уже перенаправленной части урона.
+    int hurtHeroRaw(int ei, int target, int dmg, CombatAction& act, std::vector<std::string>& log,
+                    bool allowRedirect, bool allowShield);
+    void reflectToEnemy(int ei, int target, int dmg, std::vector<std::string>& log);
+    void heroShout(int i, const std::string& text);
     void aoeHeroes(int ei, int dmg, bool magic, CombatAction& act, std::vector<std::string>& log);
     void shout(int ei, const std::string& text);
     void afterHeroAction(const std::vector<int>& killed, std::vector<std::string>& log);
@@ -113,6 +122,8 @@ private:
     int dmgReducePct_ = 0;
     EnemyScale scale_;
     std::vector<int> arcaneCharge_;  // счётчик ходов Мага до «Арканного взрыва»
+    std::vector<int> guardShield_;   // щит Земли: поглощает урон союзника до конца раунда
+    std::vector<int> redirected_;    // сколько урона Монах-Земля уже перевёл на себя за раунд
 
     // механики боссов
     int swallowed_ = -1;       // индекс проглоченного героя

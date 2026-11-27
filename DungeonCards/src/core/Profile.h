@@ -49,7 +49,7 @@ public:
     int artifactsEarned = 0;  // всего заработано
     int runs = 0, wins = 0;
     std::array<int, kBossCount> bossWins{};
-    std::array<int, 10> heroWins{};     // по ролям (Role)
+    std::array<int, 11> heroWins{};     // по ролям (Role; Монах = 10)
     std::array<int, 4> floorWins{};     // победы над боссом на этаже 1..3 (индекс = этаж)
     int flawlessWins = 0, lastStandWins = 0;
     std::set<int> unlocked;

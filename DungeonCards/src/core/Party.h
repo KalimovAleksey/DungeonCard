@@ -6,12 +6,33 @@
 
 namespace dc {
 
-enum class Role { Warrior, Mage, Cleric, Rogue, Archer, Paladin, Berserker, Druid, Bard, Seidmard };
+struct Hero;
+
+// НОВЫЕ РОЛИ ДОБАВЛЯТЬ ТОЛЬКО В КОНЕЦ: ID достижений = 100 +_role, а heroWins
+// индексируется этим же значением. Сдвиг существующих ролей сломает старые сохранения.
+enum class Role { Warrior, Mage, Cleric, Rogue, Archer, Paladin, Berserker, Druid, Bard, Seidmard, Monk };
 
 inline bool isHealer(Role r) { return r == Role::Cleric || r == Role::Druid; }
 inline bool isTank(Role r) { return r == Role::Warrior || r == Role::Paladin; }
 const char* roleTitle(Role r);    // короткое описание роли
 const char* roleAbility(Role r);  // описание умения
+
+// Стойки Монаха. Выбираются на карточке героя и сохраняются в Hero между этажами.
+enum class Stance { Wind, Lightning, Earth };
+const char* stanceName(Stance s);   // полное имя: Ветер / Молния / Земля
+const char* stanceShort(Stance s);  // надпись на кнопке
+const char* stanceDesc(Stance s);   // короткое описание под кнопками
+
+// Универсальный «вариант» героя: сейчас это стойки Монаха, позже так же можно
+// дать выбор подкласса любому другому персонажу без правки интерфейса.
+struct HeroVariant {
+    int id = 0;
+    std::string label;
+    std::string desc;
+};
+std::vector<HeroVariant> heroVariants(Role r);  // пусто, если у роли нет вариантов
+int heroVariant(const Hero& h);                 // текущий id (для Монаха = Stance)
+void setHeroVariant(Hero& h, int id);           // игнорирует чужие роли и неверные id
 
 enum class ItemKind { Weapon, Armor, Relic, Potion };
 enum class RelicEffect { Vitality, Haste, Keen, Vampire };
@@ -42,6 +63,7 @@ const char* itemKindName(ItemKind k);
 struct Hero {
     std::string name;
     Role role = Role::Warrior;
+    Stance stance = Stance::Wind;  // только для Монаха, но поле общее для всех (будущие варианты классов)
     // текущие значения (с учётом снаряжения и баффов)
     int hp = 1, maxHp = 1, atk = 1, def = 0, spd = 1;
     int critPct = 0;       // шанс крита (реликвии + Наследие)
