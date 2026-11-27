@@ -76,7 +76,7 @@ private:
         bool heal = false;
     };
 
-    static constexpr int kMaxRoster = 10;
+    static constexpr int kMaxRoster = 11;
     static constexpr int kPartySize = 4;
     static constexpr int kHand = 4;
     static constexpr int kMaxPlacements = 12;
@@ -178,7 +178,8 @@ private:
     void drawItemIcon(const Item& it, float x, float y, float size) const;
     void drawCoin(float cx, float cy, float radius) const;
     void drawBagCell(int x, int y, int size, const Item* it, bool selected, bool hover) const;
-    void drawEquipSlot(int x, int y, int size, ItemKind kind, const std::optional<Item>& item, bool fits, bool hover) const;
+    void drawEquipSlot(int x, int y, int size, ItemKind kind, const std::optional<Item>& item,
+                       bool fits, bool hover, bool locked = false) const;
     void drawItemTooltip(const Item& it, Vector2 at) const;
     void drawStar(float cx, float cy, float r, Color col) const;
     void drawStars(float x, float y, int count, float r) const;   // звёзды уровня предмета (крупные, с контуром)

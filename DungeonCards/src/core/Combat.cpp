@@ -9,6 +9,27 @@ namespace dc {
 namespace {
 constexpr int kRuneStep = 2;    // сколько ЗАЩ снимает одна руна
 constexpr int kRuneMax = 6;     // предел снятия ЗАЩ с одной цели за бой
+constexpr int kMonkChainPct = 130;      // бюджет Молнии в процентах от АТК (ослаблен после 7 этажей без Наследия)
+constexpr int kMonkChainPerTier = 5;    // Перо ветра усиливает цепь
+constexpr int kMonkChainTierCap = 3;    // не больше +15%
+constexpr int kMonkChainTargets = 2;    // цепь идёт максимум по двум целям
+constexpr int kMonkWindBase = 35;       // базовый шанс отражения
+constexpr int kMonkWindPerTier = 5;
+constexpr int kMonkWindCap = 50;
+constexpr int kMonkRedirectPct = 20;    // Земля забирает урон союзников (было 30)
+constexpr int kMonkRedirectCapPct = 35; // но не больше 35% макс. ЗДР за раунд
+constexpr int kMonkShieldBase = 3;      // щит в начале раунда: 3 + ЗАЩ/6
+constexpr int kMonkShieldDefDiv = 6;
+
+// «Перо ветра» - единственная реликвия Haste. Её тир усиливает обе стойки.
+int windRelicTier(const Hero& h) {
+    return (h.relic && h.relic->relic == RelicEffect::Haste) ? std::max(1, h.relic->tier) : 0;
+}
+// Земля делает Монаха танком только пока он жив и стоит в этой стойке.
+bool tankLike(const Hero& h) {
+    return isTank(h.role) || (h.role == Role::Monk && h.stance == Stance::Earth);
+}
+
 int minDmg(int atk) { return std::max(1, atk / 4); }
 // Урон с учётом защиты; даже против брони проходит не меньше 25% АТК.
 int calcDmg(int atk, int def) { return std::max(minDmg(atk), atk - def); }
@@ -87,7 +108,7 @@ void scaleEnemy(Enemy& e, const EnemyScale& scale) {
 
 Combat::Combat(Party& party, std::vector<Enemy> enemies, Rng& rng, int bossId, int floor)
     : party_(party), enemies_(std::move(enemies)), rng_(rng), bossId_(bossId), scale_(enemyScaleForFloor(floor)),
-      arcaneCharge_(party.heroes.size(), 0) {
+      arcaneCharge_(party.heroes.size(), 0), guardShield_(party.heroes.size(), 0), redirected_(party.heroes.size(), 0) {
     for (auto& e : enemies_) scaleEnemy(e, scale_);
     enemies_.reserve(16);  // ссылки на врагов не должны «ломаться» при призыве/делении
     slotCount_ = std::max<int>(1, static_cast<int>(enemies_.size()));
@@ -126,6 +147,12 @@ int Combat::freeSlot() const {
         if (!used) return s;
     }
     return -1;
+}
+
+bool Combat::monkGuards(int idx) const {
+    if (idx < 0 || idx >= static_cast<int>(party_.heroes.size())) return false;
+    const Hero& h = party_.heroes[idx];
+    return h.role == Role::Monk && h.stance == Stance::Earth && h.inFight() && swallowed_ != idx;
 }
 
 // Лечение героя. Если жив Друид-Похититель, половина лечения уходит ему.
@@ -184,16 +211,20 @@ int Combat::pickWeakestHero() const {
 }
 
 // Случайная цель; танки привлекают втрое больше ударов.
+// Проглоченный Пожирателем Монах не считается танком: он вообще вне боя.
 int Combat::pickWeightedHero() {
     int total = 0;
-    for (auto& h : party_.heroes)
-        if (h.inFight()) total += isTank(h.role) ? 3 : 1;
+    for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j) {
+        const Hero& h = party_.heroes[j];
+        if (!h.inFight() || swallowed_ == j) continue;
+        total += tankLike(h) ? 3 : 1;
+    }
     if (total == 0) return -1;
     int roll = rng_.range(1, total);
     for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j) {
         const Hero& h = party_.heroes[j];
-        if (!h.inFight()) continue;
-        roll -= isTank(h.role) ? 3 : 1;
+        if (!h.inFight() || swallowed_ == j) continue;
+        roll -= tankLike(h) ? 3 : 1;
         if (roll <= 0) return j;
     }
     return -1;
@@ -212,6 +243,25 @@ void Combat::startRound(std::vector<std::string>& log) {
     ++round_;
     queue_.clear();
     qi_ = 0;
+
+    // Щиты и лимит перенаправления живут ровно один раунд.
+    std::fill(guardShield_.begin(), guardShield_.end(), 0);
+    std::fill(redirected_.begin(), redirected_.end(), 0);
+    for (int i = 0; i < static_cast<int>(party_.heroes.size()); ++i) {
+        if (!monkGuards(i)) continue;  // проглоченный Монах не раздаёт щиты
+        const Hero& monk = party_.heroes[i];
+        int a = mostWoundedHero();
+        if (a < 0) continue;
+        const int amount = kMonkShieldBase + party_.heroes[a].def / kMonkShieldDefDiv;
+        guardShield_[a] += amount;
+        CombatAction sa;
+        sa.kind = CombatAction::Effect;
+        sa.actorHero = true;
+        sa.actor = i;
+        sa.hits.push_back({true, a, amount, true, false, false});
+        events_.push_back(sa);
+        log.push_back(fmt("%s даёт щит %s: %d", monk.name.c_str(), party_.heroes[a].name.c_str(), amount));
+    }
 
     // перезарядка Пожирателя
     int dev = findBoss(BossDevourer);
@@ -335,10 +385,14 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
     int totalDmg = 0;
     const int critChance = std::min(75, (h.role == Role::Rogue ? 25 : 0) + h.critPct);
 
-    auto hitInto = [&](CombatAction& out, std::vector<int>& killed, int ei, int atkValue, bool magic, bool ranged) {
+    // critMode: 0 - обычный бросок, 1 - крит, -1 - гарантированно не крит.
+    // Молния бросает крит один раз на всю цепь, поэтому все её цели получают
+    // одинаковый critMode вместо отдельных бросков.
+    auto hitInto = [&](CombatAction& out, std::vector<int>& killed, int ei, int atkValue, bool magic, bool ranged,
+                       int critMode = 0) {
         Enemy& e = enemies_[ei];
         int dmg = heroDamage(h, e, atkValue, magic, ranged);
-        bool crit = critChance > 0 && rng_.range(1, 100) <= critChance;
+        bool crit = critMode > 0 || (critMode == 0 && critChance > 0 && rng_.range(1, 100) <= critChance);
         if (crit) dmg *= 2;
         e.hp -= dmg;
         totalDmg += dmg;
@@ -374,6 +428,25 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
             act.kind = CombatAction::Ranged;
             for (size_t k = 0; k < order.size() && k < 2; ++k)
                 hitInto(act, killed, order[k], order.size() == 1 ? h.atk : h.atk * 8 / 10, false, true);
+            break;
+        case Role::Monk:
+            if (h.stance == Stance::Lightning) {
+                // Бюджет 170% АТК (+10% за тир Пера, не больше +30%) делится
+                // поровну между 1-3 целями; остаток от деления идёт первым целям.
+                act.kind = CombatAction::Ranged;
+                const int tier = std::min(kMonkChainTierCap, windRelicTier(h));
+                const int budget = h.atk * (kMonkChainPct + kMonkChainPerTier * tier) / 100;
+                const int targets = std::min<int>(kMonkChainTargets, static_cast<int>(order.size()));
+                const int share = budget / targets;
+                const int extra = budget % targets;
+                const int critMode = (critChance > 0 && rng_.range(1, 100) <= critChance) ? 1 : -1;
+                for (int k = 0; k < targets; ++k)
+                    hitInto(act, killed, order[k], share + (k < extra ? 1 : 0), true, false, critMode);
+            } else {
+                // Ветер и Земля бьются обычным оружием - их сила в пассивной защите.
+                act.kind = CombatAction::Melee;
+                hitInto(act, killed, order[0], h.atk, false, false);
+            }
             break;
         default:
             act.kind = CombatAction::Melee;
@@ -624,17 +697,105 @@ void Combat::onEnemyDeath(int ei, std::vector<std::string>& log) {
 // ----------------------------------------------------------------- враги
 
 int Combat::hurtHero(int ei, int target, int dmg, CombatAction& act, std::vector<std::string>& log) {
-    Hero& h = party_.heroes[target];
+    if (target < 0 || target >= static_cast<int>(party_.heroes.size())) return 0;
     if (dmgReducePct_ > 0) {
         // снижение на pct% с вероятностным округлением: в среднем ровно pct%, без «лишнего» очка с каждого удара
         int cut = dmg * dmgReducePct_ / 100;
         if (rng_.range(0, 99) < dmg * dmgReducePct_ % 100) ++cut;
         dmg = std::max(1, dmg - cut);
     }
-    h.hp -= dmg;
-    act.hits.push_back({true, target, dmg, false, false, !h.alive()});
-    log.push_back(fmt("%s > %s: -%d%s", enemies_[ei].name.c_str(), h.name.c_str(), dmg, h.alive() ? "" : " - пал"));
-    return dmg;
+    return hurtHeroRaw(ei, target, dmg, act, log, true, true);
+}
+
+void Combat::heroShout(int i, const std::string& text) {
+    CombatAction a;
+    a.kind = CombatAction::Shout;
+    a.actorHero = true;
+    a.actor = i;
+    a.text = text;
+    events_.push_back(a);
+}
+
+// Магический отскок Ветра: атакующий получает ровно тот урон, который должен
+// был получить Монах после защиты и «Мета». Крит и снижение ЗАЩ не участвуют.
+void Combat::reflectToEnemy(int ei, int target, int dmg, std::vector<std::string>& log) {
+    if (ei < 0 || ei >= static_cast<int>(enemies_.size()) || !enemies_[ei].alive() || dmg <= 0) return;
+    Enemy& e = enemies_[ei];
+    const int reflected = dmg;
+    e.hp -= reflected;
+    const bool dead = !e.alive();
+    CombatAction a;
+    a.kind = CombatAction::Ranged;
+    a.actorHero = true;
+    a.actor = target;
+    a.hits.push_back({false, ei, reflected, false, false, dead, dead ? e.coins : 0});
+    events_.push_back(a);
+
+    if (e.bossId == BossDevourer && e.boss && swallowed_ >= 0) {
+        swallowLeft_ -= reflected;
+        if (swallowLeft_ <= 0) releaseNow_ = true;
+    }
+    log.push_back(fmt("Отражение: %s получает %d%s", e.name.c_str(), reflected, dead ? " - повержен" : ""));
+    if (dead) afterHeroAction({ei}, log);
+}
+
+int Combat::hurtHeroRaw(int ei, int target, int dmg, CombatAction& act, std::vector<std::string>& log,
+                        bool allowRedirect, bool allowShield) {
+    Hero& h = party_.heroes[target];
+    int remain = std::max(0, dmg);
+    if (remain <= 0) return 0;
+
+    // Щит Земли гасит урон первым, до перенаправления.
+    if (allowShield && h.inFight() && guardShield_[target] > 0) {
+        const int absorbed = std::min(guardShield_[target], remain);
+        guardShield_[target] -= absorbed;
+        remain -= absorbed;
+        if (absorbed > 0) {
+            CombatAction sa;
+            sa.kind = CombatAction::Effect;
+            sa.actor = -1;
+            sa.hits.push_back({true, target, absorbed, true, false, false});
+            events_.push_back(sa);
+            log.push_back(fmt("%s: щит поглотил %d", h.name.c_str(), absorbed));
+        }
+        if (remain <= 0) return 0;
+    }
+
+    // Земля забирает часть урона союзников, пока не исчерпан лимит раунда.
+    if (allowRedirect && remain > 0) {
+        int monk = -1;
+        for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j) {
+            if (j != target && monkGuards(j)) { monk = j; break; }
+        }
+        if (monk >= 0) {
+            const int cap = party_.heroes[monk].maxHp * kMonkRedirectCapPct / 100;
+            const int room = std::max(0, cap - redirected_[monk]);
+            const int send = std::min(remain * kMonkRedirectPct / 100, room);
+            if (send > 0) {
+                redirected_[monk] += send;
+                log.push_back(fmt("%s забирает %d урона у %s", party_.heroes[monk].name.c_str(), send, h.name.c_str()));
+                // Порядок важен: сначала Монах (он может пасть), затем союзник.
+                hurtHeroRaw(ei, monk, send, act, log, false, true);  // щит на самом Монахе тоже работает
+                return hurtHeroRaw(ei, target, remain - send, act, log, false, false);
+            }
+        }
+    }
+
+    // Ветер: при удаче урона нет, а атакующий получает столько же.
+    if (h.role == Role::Monk && h.stance == Stance::Wind && h.inFight() && swallowed_ != target) {
+        const int tier = std::min(kMonkChainTierCap, windRelicTier(h));
+        const int chance = std::min(kMonkWindCap, kMonkWindBase + kMonkWindPerTier * tier);
+        if (rng_.range(1, 100) <= chance) {
+            heroShout(target, "Отражение!");
+            reflectToEnemy(ei, target, remain, log);
+            return 0;
+        }
+    }
+
+    h.hp -= remain;
+    act.hits.push_back({true, target, remain, false, false, !h.alive()});
+    log.push_back(fmt("%s > %s: -%d%s", enemies_[ei].name.c_str(), h.name.c_str(), remain, h.alive() ? "" : " - пал"));
+    return remain;
 }
 
 void Combat::aoeHeroes(int ei, int dmg, bool magic, CombatAction& act, std::vector<std::string>& log) {

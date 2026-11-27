@@ -32,6 +32,7 @@ static Hero tough(const char* name, Role r, int atk) {
 
 int main() {
     dc::enableUtf8Console();
+    std::setvbuf(stdout, nullptr, _IONBF, 0);  // чтобы FAIL не терялся при аварийном завершении
     // ---------------------------------------------------------- двери и карты
     CHECK(rotateDoors(doorBit(North), 1) == doorBit(East));
     CHECK(rotateDoors(doorBit(West), 1) == doorBit(North));
@@ -180,6 +181,18 @@ int main() {
         CHECK(!r.equipItem(0, 0));
         for (int g = 0; g < 5000 && !r.finished(); ++g) r.step();
         CHECK(r.finished());
+    }
+    {   // тренировка Монаха на привале сильнее обычной: +4 АТК / +2 ЗАЩ
+        Dungeon d;
+        d.place(card(RoomType::Rest, 1, doorBit(West) | doorBit(East)), {s.x + 1, s.y});
+        Hero monk = makeHero("Монах", Role::Monk, 40, 10, 5, 5);
+        Run r(d, 17, std::vector<Hero>{monk});
+        CHECK(r.move(East));
+        CHECK(r.phase() == RunPhase::RestChoice);
+        const int atk0 = r.party().heroes[0].atk, def0 = r.party().heroes[0].def;
+        r.restBuff({0});
+        CHECK(r.party().heroes[0].atk == atk0 + Run::kMonkBuffAtk);
+        CHECK(r.party().heroes[0].def == def0 + Run::kMonkBuffDef);
     }
 
     // ---------------------------------------------------- боссы: общие инварианты
@@ -336,8 +349,9 @@ int main() {
     // --------------------------------------------- новые классы и их умения
     {
         const auto roster = heroRoster();
-        CHECK(roster.size() == 10);
-        CHECK(roster.back().role == Role::Seidmard && roster.back().name == "Сейдмард");
+        CHECK(roster.size() == 11);
+        CHECK(roster.back().role == Role::Monk && roster.back().name == "Монах");
+        CHECK(roster.back().maxHp == 40 && roster.back().atk == 10 && roster.back().def == 5 && roster.back().spd == 5);
 
         // Сейдмард: снимает по 2 ЗАЩ за свой ход, до 6, затем бьёт магией
         {
@@ -451,6 +465,169 @@ int main() {
             Run dead(d2, 5, squad);
             CHECK(!dead.hasLivingSeidmard());
             CHECK(dead.forgePrice(it) == plain);     // погибший скидку не даёт
+        }
+
+        // Монах: базовая компенсация за два слота, стойки и запрет снаряжения
+        {
+            const auto roster2 = heroRoster();
+            const Hero base = roster2.back();
+            CHECK(heroVariants(Role::Monk).size() == 3);
+            CHECK(heroVariants(Role::Warrior).empty());
+
+            Hero earth = base;
+            setHeroVariant(earth, 2);
+            CHECK(earth.stance == Stance::Earth && earth.def == 9);  // 5 базы + 4 стойки
+            setHeroVariant(earth, 99);
+            CHECK(earth.stance == Stance::Earth);                    // неверный id игнорируется
+
+            Party blocked;
+            blocked.heroes = {base};
+            blocked.bag.push_back(gear(ItemKind::Weapon, 2, 5));
+            CHECK(!blocked.equipFromBag(0, 0));                      // оружие не надевается
+            CHECK(blocked.bag.size() == 1);
+
+            Party relic;
+            relic.heroes = {base};
+            relic.bag.push_back(gear(ItemKind::Relic, 2, 7, RelicEffect::Vitality));
+            CHECK(relic.equipFromBag(0, 0));                         // реликвия - как у всех
+            CHECK(relic.heroes[0].maxHp == 47);
+        }
+
+        // Молния: бюджет 170% АТК делится по 1-3 целям, крит один на всю цепь
+        {
+            auto dummy = [](int def) {
+                Enemy e;
+                e.name = "Цель"; e.maxHp = e.hp = 100000; e.atk = 1; e.def = def; e.spd = 1;
+                return e;
+            };
+            auto strike = [&](std::vector<Enemy> enemies, int tier, Rng& rr) {
+                Hero m = tough("Монах", Role::Monk, 20);
+                m.stance = Stance::Lightning;
+                m.baseSpd = m.spd = 9;
+                if (tier > 0) { m.relic = gear(ItemKind::Relic, tier, tier, RelicEffect::Haste); m.recalc(); }
+                Party p;
+                p.heroes = {m};
+                Combat cb(p, std::move(enemies), rr);
+                std::vector<std::string> lg;
+                cb.step(lg);
+                return cb.events();
+            };
+            Rng rr(11);
+            auto one = strike({dummy(0)}, 0, rr);
+            CHECK(one.size() == 1 && one[0].hits.size() == 1 && one[0].hits[0].amount == 26);  // 130% АТК
+            auto two = strike({dummy(0), dummy(0)}, 0, rr);
+            CHECK(two.size() == 1 && two[0].hits.size() == 2);
+            CHECK(two[0].hits[0].amount == 13 && two[0].hits[1].amount == 13);
+            auto three = strike({dummy(0), dummy(0), dummy(0)}, 0, rr);
+            CHECK(three.size() == 1 && three[0].hits.size() == 2);  // не больше двух целей
+            CHECK(three[0].hits[0].amount == 13 && three[0].hits[1].amount == 13);
+            auto feather = strike({dummy(0)}, 2, rr);
+            CHECK(feather.size() == 1 && feather[0].hits[0].amount == 28);  // +10% за тир 2
+            auto armored = strike({dummy(10)}, 0, rr);
+            CHECK(armored.size() == 1 && armored[0].hits[0].amount == 21);  // магия игнорирует 5 ЗАЩ
+        }
+
+        // Ветер: при отражении Монах не теряет ЗДР, а атакующий получает те же 35
+        {
+            bool sawReflect = false, sawPlain = false;
+            for (int seed = 1; seed <= 60 && !(sawReflect && sawPlain); ++seed) {
+                Rng rr(seed);
+                Hero m = tough("Монах", Role::Monk, 10);
+                m.stance = Stance::Wind;
+                m.baseSpd = m.spd = 1;
+                m.relic = gear(ItemKind::Relic, 3, 3, RelicEffect::Haste);  // шанс 50%
+                m.recalc();
+                Party p;
+                p.heroes = {m};
+                Enemy e;
+                e.name = "Враг"; e.maxHp = e.hp = 100000; e.atk = 40; e.def = 0; e.spd = 9;
+                Combat cb(p, {e}, rr);
+                std::vector<std::string> lg;
+                const int hp0 = p.heroes[0].hp;
+                cb.step(lg);
+
+                bool shout = false, reflect = false;
+                int amount = 0;
+                for (const auto& a : cb.events()) {
+                    if (a.kind == CombatAction::Shout && a.text == "Отражение!") shout = true;
+                    if (a.kind == CombatAction::Ranged && !a.hits.empty() && !a.hits[0].targetHero) {
+                        reflect = true;
+                        amount = a.hits[0].amount;
+                    }
+                }
+                CHECK(shout == reflect);
+                if (shout) {
+                    sawReflect = true;
+                    CHECK(p.heroes[0].hp == hp0);  // урона нет
+                    CHECK(amount == 35);           // 40 АТК - 5 ЗАЩ Монаха
+                    CHECK(cb.enemies()[0].hp == 100000 - 35);
+                } else {
+                    sawPlain = true;
+                    CHECK(p.heroes[0].hp == hp0 - 35);
+                }
+            }
+            CHECK(sawReflect && sawPlain);
+        }
+
+        // Земля: щит союзнику + 20% урона на Монаха, но не больше 35% макс. ЗДР за раунд
+        {
+            Rng rr(23);
+            Hero m = makeHero("Монах", Role::Monk, 20, 10, 5, 5);
+            setHeroVariant(m, 2);
+            Hero ally = makeHero("Союзник", Role::Warrior, 100, 8, 0, 1);
+            ally.hp = 10;  // самый раненый: получит щит и станет целью атакующего
+            Party p;
+            p.heroes = {m, ally};
+            Enemy boss = makeBoss(BossArchmage);
+            boss.maxHp = boss.hp = 100000;
+            boss.atk = 60;
+            boss.def = 0;
+            boss.spd = 9;
+            Combat cb(p, {boss}, rr);
+            std::vector<std::string> lg;
+            cb.step(lg);
+            CHECK(p.heroes[0].hp == 13);  // кап: 20 макс. ЗДР * 35% = 7 (вместо 12)
+            CHECK(p.heroes[1].hp <= 0);   // 60 - щит 4 - 7 перенаправлено = 49 > 10
+        }
+
+        // Пожиратель: проглоченный Монах не даёт щит и не забирает урон; после выплёвывания - снова даёт
+        {
+            Rng rr(31);
+            Hero monk = makeHero("Монах", Role::Monk, 100000, 20, 5, 5);
+            setHeroVariant(monk, 2);
+            Hero ally = makeHero("Союзник", Role::Warrior, 100000, 5, 0, 1);
+            Party p;
+            p.heroes = {monk, ally};
+            Enemy boss = makeBoss(BossDevourer);
+            boss.maxHp = boss.hp = 1000000;
+            boss.atk = 60;
+            boss.def = 0;
+            boss.spd = 9;
+            Combat cb(p, {boss}, rr, BossDevourer);
+            bool swallowed = false, released = false;
+            bool shieldAway = false, redirectAway = false, redirectBack = false;
+            for (int i = 0; i < 4000 && !cb.finished(); ++i) {
+                const bool awayBefore = p.heroes[0].away;
+                std::vector<std::string> lg;
+                cb.step(lg);
+                const bool awayNow = p.heroes[0].away;
+                if (awayNow) swallowed = true;
+                else if (swallowed) released = true;
+
+                bool shield = false, redirect = false;
+                for (const auto& line : lg) {
+                    if (line.find("даёт щит") != std::string::npos) shield = true;
+                    if (line.find("забирает") != std::string::npos) redirect = true;
+                }
+                if (awayBefore && shield) shieldAway = true;
+                if (awayBefore && redirect) redirectAway = true;
+                if (released && !awayNow && redirect) redirectBack = true;
+            }
+            CHECK(swallowed);
+            CHECK(!shieldAway);    // пассивки выключены, пока герой в пасти
+            CHECK(!redirectAway);
+            CHECK(released);
+            CHECK(redirectBack);   // и включаются снова после выплёвывания
         }
     }
 
@@ -914,7 +1091,8 @@ int main() {
     {
         const auto paths = manifestPaths();
         CHECK(paths.size() == assetManifest().size());          // без дублей
-        const Role roles[8] = {Role::Warrior, Role::Mage, Role::Cleric, Role::Rogue, Role::Archer, Role::Paladin, Role::Berserker, Role::Druid};
+        const Role roles[11] = {Role::Warrior, Role::Mage, Role::Cleric, Role::Rogue, Role::Archer, Role::Paladin,
+                                Role::Berserker, Role::Druid, Role::Bard, Role::Seidmard, Role::Monk};
         for (Role r : roles) CHECK(paths.count(heroArt(r)) > 0);
         for (int b = 0; b < kBossCount; ++b) CHECK(paths.count(bossArt(b)) > 0);
         const RoomType rooms[7] = {RoomType::Start, RoomType::Combat, RoomType::Treasure, RoomType::Trap, RoomType::Rest, RoomType::Boss, RoomType::Shop};
@@ -959,10 +1137,10 @@ int main() {
 
     // ------------------------------------------- профиль: артефакты и достижения
     {
-        CHECK(achievements().size() == 22);
+        CHECK(achievements().size() == 23);  // 8 боссов + 11 героев + 4 особых
         std::set<int> ids;
         for (auto& a : achievements()) { ids.insert(a.id); CHECK(a.reward == kAchievementArtifacts && !a.name.empty() && !a.desc.empty()); }
-        CHECK(ids.size() == 22);
+        CHECK(ids.size() == 23);
 
         Profile p;
         RunSummary s;

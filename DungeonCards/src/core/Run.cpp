@@ -610,14 +610,18 @@ void Run::restBuff(const std::vector<int>& idx) {
     for (int i : idx) {
         if (applied >= kBuffTargets) break;
         if (i < 0 || i >= static_cast<int>(party_.heroes.size()) || done[i] || !party_.heroes[i].alive()) continue;
-        party_.buff(i, kBuffAtk, kBuffDef);
+        const Hero& h = party_.heroes[i];
+        const bool monk = h.role == Role::Monk;
+        const int atk = monk ? kMonkBuffAtk : kBuffAtk;
+        const int def = monk ? kMonkBuffDef : kBuffDef;
+        party_.buff(i, atk, def);
         done[i] = true;
-        names += (applied ? ", " : "") + party_.heroes[i].name;
+        names += (applied ? ", " : "") + fmt("%s (+%d/%d)", h.name.c_str(), atk, def);
         ++applied;
     }
     if (!applied) return;  // ничего не выбрано - остаёмся на привале
     ++cleared_;
-    say(fmt("Привал: усилены %s (+%d АТК, +%d ЗАЩ).", names.c_str(), kBuffAtk, kBuffDef));
+    say(fmt("Привал: усилены %s.", names.c_str()));
     phase_ = RunPhase::Exploring;
 }
 
