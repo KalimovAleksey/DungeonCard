@@ -73,6 +73,8 @@ public:
     const std::vector<CombatAction>& events() const { return events_; }
     // Короткая подсказка о текущем состоянии боя с боссом (пустая для обычных боёв).
     std::string status() const;
+    // Лечение с учётом расовых бонусов (источник нужен для Трэнта).
+    int healHero(int idx, int amount, int healerIdx = -1, bool lifesteal = false);
 
 private:
     struct Actor { bool hero; int idx; int spd; };
@@ -82,7 +84,6 @@ private:
     void heroActInner(int i, std::vector<std::string>& log);
     void enemyAct(int i, std::vector<std::string>& log);
 
-    int healHero(int idx, int amount);
     void flushStolen(std::vector<std::string>& log);
     int mostWoundedHero() const;
     int pickWeightedHero();
@@ -124,6 +125,9 @@ private:
     std::vector<int> arcaneCharge_;  // счётчик ходов Мага до «Арканного взрыва»
     std::vector<int> guardShield_;   // щит Земли: поглощает урон союзника до конца раунда
     std::vector<int> redirected_;    // сколько урона Монах-Земля уже перевёл на себя за раунд
+    // Расовые эффекты, живущие только внутри одного боя.
+    std::vector<bool> hidden_;       // Тёмный эльф: не цель одиночных атак, пока не проявился
+    std::vector<bool> undyingUsed_;  // Нежить: воскрешение один раз за бой
 
     // механики боссов
     int swallowed_ = -1;       // индекс проглоченного героя

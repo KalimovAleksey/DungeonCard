@@ -1382,6 +1382,137 @@ int main() {
     CHECK(boss);
     CHECK(shops == 0);                                          // торговец - не карта, а ставится автоматически
 
+    // ------------------------------------------------------------------ расы
+    {
+        const auto roster = heroRoster();
+        const Hero& base = roster[0];  // Воин 40/8/3/4
+        for (int i = 0; i < kRaceCount; ++i) {
+            CHECK(std::string(raceInfo(static_cast<Race>(i)).name).size() > 0);
+            CHECK(std::string(raceInfo(static_cast<Race>(i)).desc).size() > 0);
+        }
+        CHECK(std::string(raceInfo(Race::None).name) == "Нет");
+
+        Hero h = base;
+        setHeroRace(h, 0);  // Человек
+        CHECK(h.maxHp == base.maxHp + 1 && h.atk == base.atk + 1 &&
+              h.def == base.def + 1 && h.spd == base.spd + 1);
+
+        Hero d = base;
+        setHeroRace(d, 2);  // Дракон
+        CHECK(d.def == base.def + 4 && raceBansArmor(d.race));
+        Party dp;
+        dp.heroes = {d};
+        dp.bag.push_back(gear(ItemKind::Armor, 2, 5));
+        CHECK(!dp.equipFromBag(0, 0));  // броня не надевается
+        CHECK(dp.bag.size() == 1);
+
+        Hero o = base;
+        setHeroRace(o, 12);  // Орк
+        CHECK(o.atk == base.atk + 2 && o.def == base.def - 2);
+
+        Hero n = base;
+        setHeroRace(n, 99);
+        CHECK(n.race == Race::None && n.atk == base.atk);  // неверный id игнорируется
+
+        // Дворф: +1 АТК только с оружием.
+        Party fp;
+        fp.heroes = {base};
+        fp.bag.push_back(gear(ItemKind::Weapon, 2, 4));
+        CHECK(fp.equipFromBag(0, 0));
+        const int armedAtk = fp.heroes[0].atk;
+        setHeroRace(fp.heroes[0], 1);
+        CHECK(fp.heroes[0].atk == armedAtk + 1 && fp.heroes[0].spd == base.spd - 1);
+    }
+
+    // Лечение: Трэнт усиливает исходящее, Эльф/Водный генаси - входящее,
+    // вампиризм не считается лечением, Нежить получает на четверть меньше.
+    {
+        Rng rr(41);
+        Hero healer = makeHero("Трэнт", Role::Cleric, 100, 10, 2, 9);
+        setHeroRace(healer, 3);
+        Hero ally = makeHero("Эльф", Role::Warrior, 100, 10, 2, 1);
+        setHeroRace(ally, 4);
+        Enemy dummy;
+        dummy.name = "Цель"; dummy.hp = dummy.maxHp = 100000; dummy.atk = 1; dummy.def = 0; dummy.spd = 1;
+        Party p;
+        p.heroes = {healer, ally};
+        Combat cb(p, {dummy}, rr);
+        std::vector<std::string> lg;
+        p.heroes[1].hp = 10;
+        CHECK(cb.healHero(1, 5, 0) == 9);         // 5 + 2 Трэнт + 2 Эльф
+        CHECK(cb.healHero(1, 5, 0, true) == 5);   // вампиризм без бонусов
+        setHeroRace(p.heroes[1], 17);             // Водный генаси
+        CHECK(cb.healHero(1, 5, 0) == 8);         // 5 + 2 Трэнт + 1
+        setHeroRace(p.heroes[1], 15);             // Нежить
+        CHECK(cb.healHero(1, 8, 0) == 7);         // (8 + 2) * 3/4
+    }
+
+    // Тёмный эльф: не цель одиночной атаки, пока не нанёс урон; после атаки доступен.
+    {
+        Rng rr(43);
+        Hero drow = makeHero("Тёмный", Role::Warrior, 100, 5, 0, 1);
+        setHeroRace(drow, 5);
+        Party p;
+        p.heroes = {drow};
+        Enemy e;
+        e.name = "Враг"; e.hp = e.maxHp = 100000; e.atk = 40; e.def = 0; e.spd = 9;
+        Combat cb(p, {e}, rr);
+        std::vector<std::string> lg;
+        const int hp0 = p.heroes[0].hp;
+        cb.step(lg);  // враг ходит первым и не находит цели
+        CHECK(p.heroes[0].hp == hp0);
+        cb.step(lg);  // герой атакует и раскрывается
+        cb.step(lg);  // враг наносит удар
+        CHECK(p.heroes[0].hp < hp0);
+    }
+
+    // Нежить поднимается один раз за бой; Огненный генаси возвращает часть урона.
+    {
+        Rng rr(47);
+        Hero undead = makeHero("Нежить", Role::Warrior, 100, 5, 0, 1);
+        setHeroRace(undead, 15);
+        undead.hp = 1;
+        Party p;
+        p.heroes = {undead};
+        Enemy e;
+        e.name = "Враг"; e.hp = e.maxHp = 100000; e.atk = 999; e.def = 0; e.spd = 9;
+        Combat cb(p, {e}, rr);
+        std::vector<std::string> lg;
+        cb.step(lg);
+        CHECK(p.heroes[0].hp == 25);  // 25% от 100
+        cb.step(lg);
+        cb.step(lg);
+        CHECK(p.heroes[0].hp <= 0);   // второй раз не воскресает
+    }
+    {
+        Rng rr(53);
+        Hero fire = makeHero("Генаси", Role::Warrior, 1000, 5, 0, 1);
+        setHeroRace(fire, 16);
+        Party p;
+        p.heroes = {fire};
+        Enemy e;
+        e.name = "Враг"; e.hp = e.maxHp = 100000; e.atk = 40; e.def = 0; e.spd = 9;
+        Combat cb(p, {e}, rr);
+        std::vector<std::string> lg;
+        cb.step(lg);
+        CHECK(cb.enemies()[0].hp == 100000 - 8);  // 20% от 40, мин 1
+    }
+
+    // Аасимар получает щит 2 в начале раунда.
+    {
+        Rng rr(59);
+        Hero aas = makeHero("Аасимар", Role::Warrior, 100, 5, 0, 1);
+        setHeroRace(aas, 9);
+        Party p;
+        p.heroes = {aas};
+        Enemy e;
+        e.name = "Враг"; e.hp = e.maxHp = 100000; e.atk = 10; e.def = 0; e.spd = 9;
+        Combat cb(p, {e}, rr);
+        std::vector<std::string> lg;
+        cb.step(lg);
+        CHECK(p.heroes[0].hp == 92);  // 10 - щит 2
+    }
+
     std::printf(failures ? "Тесты: есть ошибки (%d)\n" : "Тесты пройдены\n", failures);
     return failures ? 1 : 0;
 }

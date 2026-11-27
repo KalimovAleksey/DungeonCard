@@ -82,6 +82,49 @@ static double weight(const Hero& h, const Item& it) {
     }
 }
 
+// Умное назначение расы под класс. Стойки Монаха получают свою стихию,
+// лекари - Трэнта, стрелок - Лесного эльфа и т.д.
+static int preferredRace(int cls) {
+    switch (cls) {
+        case 0:  return static_cast<int>(Race::Goliath);      // Воин: +5 ЗДР
+        case 1:  return static_cast<int>(Race::Tiefling);     // Маг: магия игнорирует всю ЗАЩ
+        case 2:  return static_cast<int>(Race::Treant);       // Жрица: +2 исходящего лечения
+        case 3:  return static_cast<int>(Race::Gnome);        // Вор: +5% крита
+        case 4:  return static_cast<int>(Race::WoodElf);      // Лучник: +20% дальним боем
+        case 5:  return static_cast<int>(Race::Treant);       // Паладин: лечение
+        case 6:  return static_cast<int>(Race::HalfOrc);      // Берсерк: +3 АТК ниже 50% ЗДР
+        case 7:  return static_cast<int>(Race::Treant);       // Друид: лечение
+        case 8:  return static_cast<int>(Race::Human);        // Бард: +1 ко всем
+        case 9:  return static_cast<int>(Race::Human);        // Сейдмард: +1 ко всем
+        case 10: return static_cast<int>(Race::AirGenasi);    // Монах(ветер): +3 СКР, +10% крита
+        case 11: return static_cast<int>(Race::Tiefling);     // Монах(молния): магия без ЗАЩ
+        case 12: return static_cast<int>(Race::EarthGenasi);  // Монах(земля): +3 ЗАЩ, +3 ЗДР
+        default: return static_cast<int>(Race::None);
+    }
+}
+
+// mode: 0 - без рас (базовый баланс), 1 - раса под класс, 2 - случайные уникальные,
+// 3 - расы из fixed (в том числе -1 = без расы).
+static void assignRaces(std::vector<Hero>& squad, const std::vector<int>& squadClass,
+                        int mode, Rng& rng, const std::vector<int>* fixed) {
+    if (mode == 0) return;
+    if (mode == 3) {
+        for (size_t i = 0; i < squad.size(); ++i)
+            if (fixed && i < fixed->size() && (*fixed)[i] >= 0)
+                setHeroRace(squad[i], (*fixed)[i]);
+        return;
+    }
+    if (mode == 1) {
+        for (size_t i = 0; i < squad.size() && i < squadClass.size(); ++i)
+            setHeroRace(squad[i], preferredRace(squadClass[i]));
+        return;
+    }
+    std::vector<int> ids(kRaceCount);
+    for (int i = 0; i < kRaceCount; ++i) ids[i] = i;
+    rng.shuffle(ids);
+    for (size_t i = 0; i < squad.size(); ++i) setHeroRace(squad[i], ids[i % ids.size()]);
+}
+
 static int itemValue(const Item& it) { return it.kind == ItemKind::Relic ? it.tier * 2 : it.power; }
 
 static void distribute(Run& run, bool smart, Rng& rng) {
@@ -187,11 +230,13 @@ struct Result {
     bool reachedBoss = false;
     bool shopConnected = false;
     std::vector<int> roles;      // индексы классов симулятора (включая стойки Монаха) в порядке отряда
+    std::vector<int> races;      // индексы рас в порядке отряда
     std::vector<bool> survived;  // выжил ли каждый из них к концу забега
 };
 
 static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems, int buildPolicy,
-                      const std::vector<int>* fixedTeam = nullptr, const Meta* meta = nullptr) {
+                      const std::vector<int>* fixedTeam = nullptr, const Meta* meta = nullptr,
+                      int raceMode = 0, const std::vector<int>* fixedRaces = nullptr) {
     Rng rng(1000 + seed);
     Deck deck(rng, bossId);
     Dungeon dg;
@@ -250,6 +295,8 @@ static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems,
             squadClass.push_back(ids[i]);
         }
     }
+
+    assignRaces(squad, squadClass, raceMode, rng, fixedRaces);
 
     RunOptions options;
     if (meta) {
@@ -369,6 +416,7 @@ static Result playOne(int seed, int bossId, bool smartTeamPick, bool smartItems,
     out.shopConnected = shopConn;
     for (size_t i = 0; i < squad.size() && i < squadClass.size(); ++i) {
         out.roles.push_back(squadClass[i]);
+        out.races.push_back(static_cast<int>(squad[i].race));
         out.survived.push_back(i < run.party().heroes.size() && run.party().heroes[i].alive());
     }
     return out;
@@ -395,7 +443,7 @@ static void searchTeams(int games, int policy, int requireRole = -1) {
                         if (requireRole >= 0 && std::find(team.begin(), team.end(), requireRole) == team.end()) continue;
                         int w = 0, p = 0;
                         for (int g = 0; g < games; ++g) {
-                            Result r = playOne(g * 8 + boss, boss, false, true, policy, &team);
+                            Result r = playOne(g * 8 + boss, boss, false, true, policy, &team, nullptr, 1);
                             if (r.cleared < 0) continue;
                             ++p;
                             if (r.win) ++w;
@@ -422,7 +470,7 @@ static void metaImpact(int games, int policy) {
     auto rate = [&](bool smart, const Meta* meta) {
         int w = 0, p = 0;
         for (int g = 0; g < games; ++g) {
-            Result r = playOne(g, g % kBossCount, smart, smart, policy, nullptr, meta);
+            Result r = playOne(g, g % kBossCount, smart, smart, policy, nullptr, meta, 1);
             if (r.cleared < 0) continue;
             ++p;
             if (r.win) ++w;
@@ -439,6 +487,44 @@ static void metaImpact(int games, int policy) {
     }
 }
 
+// Вклад каждой расы на примере умного отряда: Воин получает проверяемую расу,
+// остальные герои - свои обычные расы. Показывает, какие расы сильнее/слабее.
+static void raceImpact(int games, int policy) {
+    const int g = std::max(200, games / 10);
+    const std::vector<int> team = {0, 1, 2, 7};  // Воин Маг Жрица Друид
+    std::vector<int> races(4);
+    for (size_t i = 0; i < team.size(); ++i) races[i] = preferredRace(team[i]);
+
+    struct RaceRate { double win = 0, survived = 0; };
+    auto rate = [&](const std::vector<int>& fixed) {
+        int w = 0, s = 0, p = 0;
+        for (int seed = 0; seed < g; ++seed) {
+            Result r = playOne(seed, seed % kBossCount, true, true, policy, &team, nullptr, 3, &fixed);
+            if (r.cleared < 0) continue;
+            ++p;
+            if (r.win) ++w;
+            if (!r.survived.empty() && r.survived[0]) ++s;  // проверяем выживаемость Воина с тестируемой расой
+        }
+        RaceRate out;
+        out.win = 100.0 * w / std::max(1, p);
+        out.survived = 100.0 * s / std::max(1, p);
+        return out;
+    };
+
+    const RaceRate base = rate(races);
+    std::printf("Расы: отряд Воин/Маг/Жрица/Друид, партий на расу: %d, база %5.1f%% / %5.1f%%\n",
+                g, base.win, base.survived);
+    std::printf("  %s  %s  %s  %s\n", padUtf8("раса", 22).c_str(), "победы", "выжил Воин", "к базе");
+    for (int race = 0; race < kRaceCount; ++race) {
+        std::vector<int> cur = races;
+        cur[0] = race;
+        const RaceRate st = rate(cur);
+        std::printf("  %s  %5.1f%%  %9.1f%%  %+6.1f\n",
+                    padUtf8(std::string(raceInfo(static_cast<Race>(race)).name), 22).c_str(),
+                    st.win, st.survived, st.win - base.win);
+    }
+}
+
 int main(int argc, char** argv) {
     dc::enableUtf8Console();
     int games = argc > 1 ? std::atoi(argv[1]) : 3000;  // партий на ячейку
@@ -446,6 +532,7 @@ int main(int argc, char** argv) {
     if (argc > 3 && std::string(argv[3]) == "search")
     { searchTeams(games, policy, argc > 4 ? std::atoi(argv[4]) : -1); return 0; }
     if (argc > 3 && std::string(argv[3]) == "impact") { metaImpact(games, policy); return 0; }
+    if (argc > 3 && std::string(argv[3]) == "races") { raceImpact(games, policy); return 0; }
     // «smart» — только умный отряд + умная раздача (без наивных режимов), быстрый прогон баланса
     const bool smartOnly = argc > 3 && std::string(argv[3]) == "smart";
     // argv[4]: прокачка «Наследия»: 0 - нет, 1 - половина уровней, 2 - максимум
@@ -473,10 +560,14 @@ int main(int argc, char** argv) {
     int classPlayed[4][kClassCount] = {};
     int classWins[4][kClassCount] = {};
     int classSurvived[4][kClassCount] = {};
+    int racePlayed[4][kRaceCount] = {};
+    int raceWins[4][kRaceCount] = {};
+    int raceSurvived[4][kRaceCount] = {};
     for (int c = smartOnly ? 3 : 0; c < 4; ++c)
         for (int g = 0; g < games; ++g) {
             int boss = g % kBossCount;
-            Result r = playOne(g, boss, cfgs[c].team, cfgs[c].items, policy, nullptr, metaPtr);
+            Result r = playOne(g, boss, cfgs[c].team, cfgs[c].items, policy, nullptr, metaPtr,
+                               cfgs[c].items ? 1 : 2);
             if (r.cleared < 0) continue;  // босс не удалось разместить
             ++played[c][boss];
             if (r.win) ++wins[c][boss];
@@ -489,6 +580,13 @@ int main(int argc, char** argv) {
                 ++classPlayed[c][cls];
                 if (r.win) ++classWins[c][cls];
                 if (r.survived[i]) ++classSurvived[c][cls];
+            }
+            for (size_t i = 0; i < r.races.size() && i < r.survived.size(); ++i) {
+                const int race = r.races[i];
+                if (race < 0 || race >= kRaceCount) continue;
+                ++racePlayed[c][race];
+                if (r.win) ++raceWins[c][race];
+                if (r.survived[i]) ++raceSurvived[c][race];
             }
         }
     for (int c = smartOnly ? 3 : 0; c < 4; ++c) {
@@ -538,6 +636,43 @@ int main(int argc, char** argv) {
         for (const auto& row : rows) {
             std::printf("  %s", padUtf8(className(row.cls, roster), 16).c_str());
             for (int c = 0; c < 4; ++c) std::printf("  %s", padUtf8(cell(c, row.cls), 16).c_str());
+            std::printf("\n");
+        }
+    }
+
+    std::printf("\nПо расам (победы / выжил, %% от забегов с этой расой в отряде):\n");
+    if (smartOnly)
+        std::printf("  умный режим подбирает расу под класс, поэтому часть рас не встречается\n");
+    struct RaceRow { int race; double rate[4]; };
+    std::vector<RaceRow> raceRows;
+    for (int race = 0; race < kRaceCount; ++race) {
+        RaceRow row{race, {-1, -1, -1, -1}};
+        for (int c = 0; c < 4; ++c)
+            if (racePlayed[c][race] > 0)
+                row.rate[c] = 100.0 * raceWins[c][race] / racePlayed[c][race];
+        raceRows.push_back(row);
+    }
+    std::stable_sort(raceRows.begin(), raceRows.end(), [](const RaceRow& a, const RaceRow& b) { return a.rate[3] > b.rate[3]; });
+    auto raceCell = [&](int c, int race) {
+        if (racePlayed[c][race] == 0) return std::string("-");
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%4.1f%% / %4.1f%%",
+                      100.0 * raceWins[c][race] / racePlayed[c][race],
+                      100.0 * raceSurvived[c][race] / racePlayed[c][race]);
+        return std::string(buf);
+    };
+    auto raceName = [](int race) { return std::string(raceInfo(static_cast<Race>(race)).name); };
+    if (smartOnly) {
+        std::printf("  %s  %s\n", padUtf8("раса", 18).c_str(), "победы / выжил");
+        for (const auto& row : raceRows)
+            std::printf("  %s  %s\n", padUtf8(raceName(row.race), 18).c_str(), raceCell(3, row.race).c_str());
+    } else {
+        const char* heads[5] = {"раса", "наивная", "отряд под босса", "умные предметы", "всё умное"};
+        for (int i = 0; i < 5; ++i) std::printf("  %s", padUtf8(heads[i], 18).c_str());
+        std::printf("\n");
+        for (const auto& row : raceRows) {
+            std::printf("  %s", padUtf8(raceName(row.race), 18).c_str());
+            for (int c = 0; c < 4; ++c) std::printf("  %s", padUtf8(raceCell(c, row.race), 18).c_str());
             std::printf("\n");
         }
     }

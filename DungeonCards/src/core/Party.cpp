@@ -63,6 +63,44 @@ const char* stanceDesc(Stance s) {
     return "";
 }
 
+static const RaceInfo kRaceInfo[kRaceCount + 1] = {
+    {"Человек",        "+1 ко всем характеристикам."},
+    {"Дворф",          "Все Weapons дают +1 АТК, но -1 СКР."},
+    {"Дракон",         "+4 ЗАЩ, но не может носить броню."},
+    {"Трэнт",          "+2 к исходящему лечению, но -2 ЗДР."},
+    {"Эльф",           "+2 к входящему лечению (кроме вампиризма), но -1 ЗАЩ."},
+    {"Тёмный эльф",    "Не цель одиночных атак, пока не атаковал и не был ранен; AoE бьёт. -2 ЗДР."},
+    {"Гном",           "+5% крита, но -2 АТК."},
+    {"Полуорк",        "+3 АТК ниже половины ЗДР, но -1 ЗАЩ."},
+    {"Тифлинг",        "Магия игнорирует всю ЗАЩ врага, но -2 ЗДР."},
+    {"Аасимар",        "Щит 2 в начале каждого раунда, но -1 СКР."},
+    {"Халфлинг",       "+2 СКР и иммунитет к ловушкам, но -2 ЗДР."},
+    {"Голиаф",         "+5 ЗДР, но -1 СКР."},
+    {"Орк",            "+2 АТК, но -2 ЗАЩ."},
+    {"Лесной эльф",    "+1 СКР и +20% урона дальними атаками, но -1 ЗДР."},
+    {"Шифтер",         "+2 АТК ниже половины ЗДР, но -1 ЗАЩ."},
+    {"Нежить",         "Один раз за бой воскресает с 25% ЗДР, но -25% лечения."},
+    {"Огненный генаси","20% полученного урона возвращается атакующему, но -2 ЗАЩ."},
+    {"Водный генаси",  "+1 входящего лечения и +1 ЗАЩ, но -1 АТК."},
+    {"Земляной генаси","+3 ЗАЩ и +3 ЗДР, но -2 СКР."},
+    {"Воздушный генаси","+3 СКР и +10% крита, но -2 ЗДР."},
+    {"Нет",            "Раса ещё не выбрана."},  // Race::None, индекс kRaceCount
+};
+
+const RaceInfo& raceInfo(Race r) {
+    const int i = static_cast<int>(r);
+    return kRaceInfo[i >= 0 && i <= kRaceCount ? i : kRaceCount];
+}
+
+bool raceBansArmor(Race r) { return r == Race::Dragon; }
+
+void setHeroRace(Hero& h, int raceId) {
+    if (raceId < 0 || raceId >= kRaceCount) return;
+    h.race = static_cast<Race>(raceId);
+    if (raceBansArmor(h.race)) h.armor.reset();  // дракон не может носить броню
+    h.recalc();
+}
+
 std::vector<HeroVariant> heroVariants(Role r) {
     if (r != Role::Monk) return {};
     std::vector<HeroVariant> out;
@@ -119,7 +157,32 @@ void Hero::recalc() {
     }
     // Стойка Земли компенсирует отсутствие брони постоянной +4 ЗАЩ.
     if (role == Role::Monk && stance == Stance::Earth) defB += 4;
-    const int newMax = baseHp + hpB;
+
+    // Расовые бонусы к характеристикам. Динамические эффекты (-low HP, крит, лечение)
+    // применяются в Combat, здесь только постоянные модификаторы.
+    switch (race) {
+        case Race::Human:      hpB += 1; atkB += 1; defB += 1; spdB += 1; break;
+        case Race::Dwarf:      if (weapon) atkB += 1; spdB -= 1; break;
+        case Race::Dragon:     defB += 4; break;
+        case Race::Treant:     hpB -= 2; break;
+        case Race::Elf:        defB -= 1; break;
+        case Race::Drow:       hpB -= 2; break;
+        case Race::Gnome:      atkB -= 2; break;
+        case Race::HalfOrc:    defB -= 1; break;
+        case Race::Tiefling:   hpB -= 2; break;
+        case Race::Aasimar:    spdB -= 1; break;
+        case Race::Halfling:   hpB -= 2; spdB += 2; break;
+        case Race::Goliath:    hpB += 5; spdB -= 1; break;
+        case Race::Orc:        atkB += 2; defB -= 2; break;
+        case Race::WoodElf:    hpB -= 1; spdB += 1; break;
+        case Race::Shifter:    defB -= 1; break;
+        case Race::Undying:    break;
+        case Race::FireGenasi: defB -= 2; break;
+        case Race::WaterGenasi:atkB -= 1; defB += 1; break;
+        case Race::EarthGenasi:hpB += 3; defB += 3; spdB -= 2; break;
+        case Race::AirGenasi:  hpB -= 2; spdB += 3; break;
+    }
+    const int newMax = std::max(1, baseHp + hpB);
     if (alive()) {
         // Текущее здоровье следует за максимальным в обе стороны: надевание предмета
         // прибавляет и текущее, снятие - возвращает оба значения. Иначе снятие
@@ -131,9 +194,9 @@ void Hero::recalc() {
     // Отрицательные свойства уникального оружия (события): складываем с базой/баффами.
     const int penAtk = weapon ? weapon->eventPenaltyAtk : 0;
     const int penDef = armor ? armor->eventPenaltyDef : 0;
-    atk = baseAtk + buffAtk + buffAtkCombat + atkB + penAtk;
-    def = baseDef + buffDef + defB + penDef;
-    spd = baseSpd + spdB;
+    atk = std::max(1, baseAtk + buffAtk + buffAtkCombat + atkB + penAtk);
+    def = std::max(0, baseDef + buffDef + defB + penDef);
+    spd = std::max(1, baseSpd + spdB);
     critPct = crit + metaCritPct;
     lifestealPct = vamp;
 }
@@ -365,6 +428,8 @@ bool Party::equipFromBag(int bagIndex, int heroIndex) {
     if (it.kind == ItemKind::Potion || !h.alive()) return false;
     // Монах сознательно отказывается от оружия и брони: его база уже их компенсирует.
     if (h.role == Role::Monk && (it.kind == ItemKind::Weapon || it.kind == ItemKind::Armor)) return false;
+    // Дракон не носит броню (вместо неё у него постоянные +4 ЗАЩ).
+    if (raceBansArmor(h.race) && it.kind == ItemKind::Armor) return false;
     bag.erase(bag.begin() + bagIndex);
     std::optional<Item>& s = h.slot(it.kind);
     if (s) bag.push_back(*s);  // старый предмет возвращается в рюкзак

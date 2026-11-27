@@ -23,6 +23,21 @@ const char* stanceName(Stance s);   // полное имя: Ветер / Мол�
 const char* stanceShort(Stance s);  // надпись на кнопке
 const char* stanceDesc(Stance s);   // короткое описание под кнопками
 
+// Расы. НОВЫЕ РАСЫ ДОБАВЛЯТЬ ТОЛЬКО В КОНЕЦ: индексы используются в экране
+// выбора и в симуляторе. Всего 20 рас, на забег предлагается случайные 6.
+enum class Race {
+    Human, Dwarf, Dragon, Treant, Elf, Drow, Gnome, HalfOrc, Tiefling, Aasimar,
+    Halfling, Goliath, Orc, WoodElf, Shifter, Undying, FireGenasi, WaterGenasi,
+    EarthGenasi, AirGenasi,
+    None  // раса ещё не выбрана: бонусов нет. Не предлагается игроку.
+};
+constexpr int kRaceCount = 20;  // только играбельные расы, индексы 0..19
+struct RaceInfo {
+    const char* name;
+    const char* desc;  // короткая подсказка для картинки и справочника
+};
+const RaceInfo& raceInfo(Race r);
+
 // Универсальный «вариант» героя: сейчас это стойки Монаха, позже так же можно
 // дать выбор подкласса любому другому персонажу без правки интерфейса.
 struct HeroVariant {
@@ -33,6 +48,9 @@ struct HeroVariant {
 std::vector<HeroVariant> heroVariants(Role r);  // пусто, если у роли нет вариантов
 int heroVariant(const Hero& h);                 // текущий id (для Монаха = Stance)
 void setHeroVariant(Hero& h, int id);           // игнорирует чужие роли и неверные id
+
+void setHeroRace(Hero& h, int raceId);          // применяет расу и пересчитывает статы
+bool raceBansArmor(Race r);                     // Дракон не носит броню
 
 enum class ItemKind { Weapon, Armor, Relic, Potion };
 enum class RelicEffect { Vitality, Haste, Keen, Vampire };
@@ -64,6 +82,7 @@ struct Hero {
     std::string name;
     Role role = Role::Warrior;
     Stance stance = Stance::Wind;  // только для Монаха, но поле общее для всех (будущие варианты классов)
+    Race race = Race::None;        // раса выбирается после класса, бонусы применяются в recalc() и в бою
     // текущие значения (с учётом снаряжения и баффов)
     int hp = 1, maxHp = 1, atk = 1, def = 0, spd = 1;
     int critPct = 0;       // шанс крита (реликвии + Наследие)

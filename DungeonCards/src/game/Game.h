@@ -31,7 +31,7 @@ public:
     void run();
 
 private:
-    enum class Screen { MainMenu, Select, Build, Run, Result, Pause, Settings, Achievements, Legacy, Guide };
+    enum class Screen { MainMenu, Select, RaceSelect, Build, Run, Result, Pause, Settings, Achievements, Legacy, Guide };
     struct Settings {
         int width = 1280;
         int height = 720;
@@ -129,6 +129,7 @@ private:
     // обновление
     void update(float dt);
     void updateSelect();
+    void updateRaceSelect();
     void updateBuild();
     void updateRun(float dt);
     void updateExplore(float dt);
@@ -150,6 +151,7 @@ private:
     void draw();
     void drawScreen(Screen s);
     void drawSelect();
+    void drawRaceSelect();
     void drawBuild();
     void drawRunView();
     void drawArena();
@@ -207,6 +209,11 @@ private:
     int bossPick_ = 0;             // выбранный из трёх
     int bossId_ = 0;               // босс забега
     bool showBossCard_ = false;
+
+    // выбор рас: один набор из 6 на забег, у четырёх героев расы не повторяются
+    int offeredRaces_[6] = {0, 1, 2, 3, 4, 5};
+    int racePick_[kPartySize] = {-1, -1, -1, -1};  // индекс в offeredRaces_ или -1
+    int raceHero_ = 0;                              // какому герою выбираем расу
 
     // скролл экрана выбора
     float selScroll_ = 0.0f;
