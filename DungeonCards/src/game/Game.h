@@ -113,6 +113,7 @@ private:
     void saveSettings() const;
     void buildResolutionList();
     void applyDisplay();
+    void requestDisplayChange();       // плавный переход: затемнение -> смена режима -> проявление
     void syncRenderTarget();           // пересоздаёт буфер под текущий размер окна
     void viewTransform(float& scaleX, float& scaleY, float& offX, float& offY) const;
     void beginScissor(int x, int y, int w, int h) const;  // область обрезки в логических координатах
@@ -230,6 +231,9 @@ private:
     RenderTexture2D target_{};
     int targetW_ = 0, targetH_ = 0;   // размер буфера в физических пикселях окна
     float targetScale_ = 1.f;
+    float displayFade_ = 0.f;         // 0 - прозрачно, 1 - чёрный экран
+    int displayFadeDir_ = 0;          // +1 затемнение, -1 проявление, 0 - покой
+    bool displayChangePending_ = false;
     bool quit_ = false;
     Screen prevScreen_ = Screen::MainMenu;     // куда вернуться из паузы
     Screen settingsBack_ = Screen::MainMenu;   // куда вернуться из настроек
