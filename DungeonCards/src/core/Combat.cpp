@@ -108,7 +108,11 @@ void scaleEnemy(Enemy& e, const EnemyScale& scale) {
 
 Combat::Combat(Party& party, std::vector<Enemy> enemies, Rng& rng, int bossId, int floor)
     : party_(party), enemies_(std::move(enemies)), rng_(rng), bossId_(bossId), scale_(enemyScaleForFloor(floor)),
-      arcaneCharge_(party.heroes.size(), 0), guardShield_(party.heroes.size(), 0), redirected_(party.heroes.size(), 0) {
+      arcaneCharge_(party.heroes.size(), 0), guardShield_(party.heroes.size(), 0), redirected_(party.heroes.size(), 0),
+      hidden_(party.heroes.size(), false), undyingUsed_(party.heroes.size(), false) {
+    // Тёмный эльф начинает бой скрытым: одиночные атаки не целятся в него.
+    for (size_t i = 0; i < party.heroes.size(); ++i)
+        hidden_[i] = party.heroes[i].race == Race::Drow;
     for (auto& e : enemies_) scaleEnemy(e, scale_);
     enemies_.reserve(16);  // ссылки на врагов не должны «ломаться» при призыве/делении
     slotCount_ = std::max<int>(1, static_cast<int>(enemies_.size()));
@@ -156,9 +160,20 @@ bool Combat::monkGuards(int idx) const {
 }
 
 // Лечение героя. Если жив Друид-Похититель, половина лечения уходит ему.
-int Combat::healHero(int idx, int amount) {
+// Бонусы рас: Трэнт усиливает исходящее лечение, Эльф/Водный генаси -
+// входящее (вампиризм не считается лечением для Эльфа), Нежить получает меньше.
+int Combat::healHero(int idx, int amount, int healerIdx, bool lifesteal) {
+    if (idx < 0 || idx >= static_cast<int>(party_.heroes.size())) return 0;
     Hero& h = party_.heroes[idx];
     int give = amount, stolen = 0;
+    if (!lifesteal) {
+        if (healerIdx >= 0 && healerIdx < static_cast<int>(party_.heroes.size())) {
+            if (party_.heroes[healerIdx].race == Race::Treant) give += 2;
+        }
+        if (h.race == Race::Elf) give += 2;
+        if (h.race == Race::WaterGenasi) give += 1;
+    }
+    if (h.race == Race::Undying) give = give * 3 / 4;
     int di = findBoss(BossDruid);
     if (di >= 0) {
         stolen = amount / 2;
@@ -204,10 +219,14 @@ int Combat::pickWeakestHero() const {
     int best = -1;
     for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j) {
         const Hero& o = party_.heroes[j];
-        if (!o.inFight()) continue;
+        if (!o.inFight() || hidden_[j]) continue;  // Тёмный эльф вне цели для одиночных атак
         if (best < 0 || o.hp < party_.heroes[best].hp) best = j;
     }
-    return best;
+    return best >= 0 ? best : [&]() {  // если все остальные скрыты/выбыли - всё же есть кого бить
+        for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j)
+            if (party_.heroes[j].inFight()) return j;
+        return -1;
+    }();
 }
 
 // Случайная цель; танки привлекают втрое больше ударов.
@@ -216,14 +235,14 @@ int Combat::pickWeightedHero() {
     int total = 0;
     for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j) {
         const Hero& h = party_.heroes[j];
-        if (!h.inFight() || swallowed_ == j) continue;
+        if (!h.inFight() || swallowed_ == j || hidden_[j]) continue;
         total += tankLike(h) ? 3 : 1;
     }
     if (total == 0) return -1;
     int roll = rng_.range(1, total);
     for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j) {
         const Hero& h = party_.heroes[j];
-        if (!h.inFight() || swallowed_ == j) continue;
+        if (!h.inFight() || swallowed_ == j || hidden_[j]) continue;
         roll -= tankLike(h) ? 3 : 1;
         if (roll <= 0) return j;
     }
@@ -247,6 +266,19 @@ void Combat::startRound(std::vector<std::string>& log) {
     // Щиты и лимит перенаправления живут ровно один раунд.
     std::fill(guardShield_.begin(), guardShield_.end(), 0);
     std::fill(redirected_.begin(), redirected_.end(), 0);
+    // Аасимар: небольшой щит себе в начале каждого раунда.
+    for (int i = 0; i < static_cast<int>(party_.heroes.size()); ++i) {
+        const Hero& h = party_.heroes[i];
+        if (h.race != Race::Aasimar || !h.inFight()) continue;
+        guardShield_[i] += 2;
+        CombatAction sa;
+        sa.kind = CombatAction::Effect;
+        sa.actorHero = true;
+        sa.actor = i;
+        sa.hits.push_back({true, i, 2, true, false, false});
+        events_.push_back(sa);
+        log.push_back(fmt("%s: щит Аасимара +2", h.name.c_str()));
+    }
     for (int i = 0; i < static_cast<int>(party_.heroes.size()); ++i) {
         if (!monkGuards(i)) continue;  // проглоченный Монах не раздаёт щиты
         const Hero& monk = party_.heroes[i];
@@ -354,15 +386,22 @@ int Combat::heroDamage(const Hero& h, const Enemy& e, int atkValue, bool magic, 
     // Руны Сейдмарда снимают часть ЗАЩ для ВСЕХ героев, обычные и магические атаки.
     const int def = std::max(0, e.def - e.defShred);
     int eff = def;
-    if (magic) eff = (e.bossId == BossKnight) ? 0 : def / 2;  // магия: полпрозрачная защита, у рыцаря - вся
-    int dmg = calcDmg(atkValue, eff);
+    if (magic) eff = (e.bossId == BossKnight || h.race == Race::Tiefling) ? 0 : def / 2;
+    int atk = atkValue;
+    if (h.hp * 2 < h.maxHp) {  // динамические бонусы рас при низком ЗДР
+        if (h.race == Race::HalfOrc) atk += 3;
+        if (h.race == Race::Shifter) atk += 2;
+    }
+    int dmg = calcDmg(atk, eff);
     if (ranged && e.bossId == BossDragon) dmg = dmg * 13 / 10;  // дракон уязвим к дальнему бою
+    if (ranged && h.race == Race::WoodElf) dmg = dmg * 12 / 10;  // лесной эльф: +20% дальним боем
     if (e.bossId == BossNecro && e.boss && anyMinionAlive()) dmg = std::max(1, dmg / 4);  // барьер костей
-    (void)h;
     return dmg;
 }
 
 void Combat::heroAct(int i, std::vector<std::string>& log) {
+    // Тёмный эльф перестаёт быть скрытым, как только нанёс урон.
+    if (i >= 0 && i < static_cast<int>(hidden_.size())) hidden_[i] = false;
     heroActInner(i, log);
     flushStolen(log);
 }
@@ -383,7 +422,10 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
     std::sort(order.begin(), order.end(), [&](int a, int b) { return enemies_[a].hp < enemies_[b].hp; });
 
     int totalDmg = 0;
-    const int critChance = std::min(75, (h.role == Role::Rogue ? 25 : 0) + h.critPct);
+    int raceCrit = 0;
+    if (h.race == Race::Gnome) raceCrit += 5;
+    if (h.race == Race::AirGenasi) raceCrit += 10;
+    const int critChance = std::min(75, (h.role == Role::Rogue ? 25 : 0) + h.critPct + raceCrit);
 
     // critMode: 0 - обычный бросок, 1 - крит, -1 - гарантированно не крит.
     // Молния бросает крит один раз на всю цепь, поэтому все её цели получают
@@ -477,7 +519,7 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
     const int stealPct = h.lifestealPct + auraVamp;
     if (stealPct > 0 && totalDmg > 0 && h.inFight()) {
         int want = std::max(1, totalDmg * stealPct / 100);
-        int gained = healHero(i, want);
+        int gained = healHero(i, want, -1, true);  // вампиризм: бонус Эльфа не применяется
         if (gained > 0) {
             CombatAction ha;
             ha.kind = CombatAction::Effect;
@@ -562,7 +604,7 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
     if (h.role == Role::Cleric) {
         int a = mostWoundedHero();
         if (a >= 0 && party_.heroes[a].hp * 100 < party_.heroes[a].maxHp * 60) {
-            int gained = healHero(a, h.atk + 3);
+            int gained = healHero(a, h.atk + 3, i);
             CombatAction ha;
             ha.kind = CombatAction::Heal;
             ha.actorHero = true;
@@ -590,7 +632,7 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
             const int bonus = h.def / 2;
             for (size_t k = 0; k < targets.size(); ++k) {
                 const int amount = std::max(1, 6 - static_cast<int>(k)) + bonus;
-                const int gained = healHero(targets[k], amount);
+                const int gained = healHero(targets[k], amount, i);
                 if (gained > 0) ha.hits.push_back({true, targets[k], gained, true, false, false});
             }
             events_.push_back(ha);
@@ -600,7 +642,7 @@ void Combat::heroActInner(int i, std::vector<std::string>& log) {
     if (h.role == Role::Paladin) {
         int a = mostWoundedHero();
         if (a >= 0 && party_.heroes[a].hp < party_.heroes[a].maxHp) {
-            int gained = healHero(a, 2);
+            int gained = healHero(a, 2, i);
             if (gained > 0) {
                 CombatAction ha;
                 ha.kind = CombatAction::Heal;
@@ -744,6 +786,9 @@ int Combat::hurtHeroRaw(int ei, int target, int dmg, CombatAction& act, std::vec
     Hero& h = party_.heroes[target];
     int remain = std::max(0, dmg);
     if (remain <= 0) return 0;
+    // Тёмный эльф теряет скрытность, как только получил урон (даже если щит
+    // поглотил всё: удар по нему уже был направлен).
+    if (hidden_[target]) hidden_[target] = false;
 
     // Щит Земли гасит урон первым, до перенаправления.
     if (allowShield && h.inFight() && guardShield_[target] > 0) {
@@ -793,8 +838,30 @@ int Combat::hurtHeroRaw(int ei, int target, int dmg, CombatAction& act, std::vec
     }
 
     h.hp -= remain;
+
+    // Нежить: один раз за бой поднимается с 25% макс. ЗДР вместо смерти.
+    bool revived = false;
+    if (!h.alive() && h.race == Race::Undying && !undyingUsed_[target] && swallowed_ != target) {
+        undyingUsed_[target] = true;
+        h.hp = std::max(1, h.maxHp / 4);
+        revived = true;
+        CombatAction ra;
+        ra.kind = CombatAction::Effect;
+        ra.actorHero = true;
+        ra.actor = target;
+        ra.hits.push_back({true, target, h.hp, true, false, false});
+        events_.push_back(ra);
+        log.push_back(fmt("%s: Нежить поднимается с %d ЗДР!", h.name.c_str(), h.hp));
+    }
+
     act.hits.push_back({true, target, remain, false, false, !h.alive()});
-    log.push_back(fmt("%s > %s: -%d%s", enemies_[ei].name.c_str(), h.name.c_str(), remain, h.alive() ? "" : " - пал"));
+    log.push_back(fmt("%s > %s: -%d%s", enemies_[ei].name.c_str(), h.name.c_str(), remain,
+                      h.alive() ? (revived ? " (воскрес)" : "") : " - пал"));
+
+    // Огненный генаси: часть полученного урона возвращается атакующему.
+    // Не рекурсирует: отскок идёт через reflectToEnemy, минуя hurtHeroRaw.
+    if (h.race == Race::FireGenasi && remain > 0 && h.alive() && ei >= 0 && ei < static_cast<int>(enemies_.size()))
+        reflectToEnemy(ei, target, std::max(1, remain * 20 / 100), log);
     return remain;
 }
 
@@ -851,7 +918,8 @@ void Combat::enemyAct(int i, std::vector<std::string>& log) {
             if (swallowed_ < 0 && enemies_[i].cd <= 0 && ableCount() >= 2) {
                 int best = -1;  // глотает самого сильного бойца
                 for (int j = 0; j < static_cast<int>(party_.heroes.size()); ++j)
-                    if (party_.heroes[j].inFight() && (best < 0 || party_.heroes[j].atk > party_.heroes[best].atk)) best = j;
+                    if (party_.heroes[j].inFight() && !hidden_[j] &&
+                        (best < 0 || party_.heroes[j].atk > party_.heroes[best].atk)) best = j;
                 swallowed_ = best;
                 swallowLeft_ = 55 * scale_.hpPct / 100;
                 party_.heroes[best].away = true;

@@ -545,6 +545,10 @@ void Run::resolveTrap(int d) {
         const int dmg = std::max(1, d * 5 * pct / 100);
         for (size_t k = 0; k < alive.size() && k < 2; ++k) {
             Hero& h = party_.heroes[alive[k]];
+            if (h.race == Race::Halfling) {  // ловушки не наносят ему урона
+                say(fmt("%s увертывается от ловушки.", h.name.c_str()));
+                continue;
+            }
             h.hp -= dmg;
             say(fmt("%s: -%d%s", h.name.c_str(), dmg, h.alive() ? "" : " - пал"));
         }

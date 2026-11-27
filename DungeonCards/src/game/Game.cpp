@@ -164,7 +164,8 @@ R slotRect(int i, int k) {
 }
 // Монах носит только реликвию: две остальные ячейки показаны закрытыми.
 bool slotLocked(const Hero& h, ItemKind k) {
-    return h.role == Role::Monk && (k == ItemKind::Weapon || k == ItemKind::Armor);
+    return (h.role == Role::Monk && (k == ItemKind::Weapon || k == ItemKind::Armor)) ||
+           (raceBansArmor(h.race) && k == ItemKind::Armor);  // Дракон тоже без брони
 }
 int restAtkBonus(const Hero& h) { return h.role == Role::Monk ? Run::kMonkBuffAtk : Run::kBuffAtk; }
 int restDefBonus(const Hero& h) { return h.role == Role::Monk ? Run::kMonkBuffDef : Run::kBuffDef; }
@@ -175,6 +176,11 @@ R variantRect(int cardX, int cardY, int k, int count) {
     const int total = count * bw + (count - 1) * gap;
     return {cardX + (kSelCardW - total) / 2 + k * (bw + gap), cardY + 176, bw, 28};
 }
+
+// Экран рас: 6 карточек в 3 колонки по 2 ряда, герой выбирается по очереди.
+R raceCard(int k) { return {190 + (k % 3) * 310, 154 + (k / 3) * 196, 300, 180}; }
+const R kRaceBackBtn{170, 660, 420, 44};
+const R kRaceNextBtn{690, 660, 420, 44};
 
 R restockButton() { return {kGridX + 290, kGridY + 10, 260, 36}; }
 R sellButton() { return {kGridX + 430, kGridY + 10, 290, 34}; }
@@ -452,13 +458,14 @@ void Game::refreshRoster() {
     roster_ = heroRoster();
     for (auto& h : roster_) profile_.meta.applyToHero(h);
     // Между этажами отряд берётся из Run, а карточки пересоздаются заново:
-    // переносим выбранную стойку, чтобы она не сбрасывалась на Ветер.
+    // переносим выбранную стойку и расу, чтобы они не сбрасывались.
     if (run_) {
         const auto& keptHeroes = run_->party().heroes;
         for (auto& h : roster_) {
             for (const auto& kept : keptHeroes) {
                 if (kept.role == h.role && kept.name == h.name) {
                     setHeroVariant(h, heroVariant(kept));
+                    setHeroRace(h, static_cast<int>(kept.race));
                     break;
                 }
             }
@@ -482,6 +489,19 @@ int Game::chosenCount() const {
 
 void Game::rollRun() {
     refreshRoster();  // вдруг в «Наследии» что-то купили
+    // Один набор из шести рас на весь забег; на следующем этаже он не меняется.
+    // Перед каждым новым забегом берём свежее случайное зерно, иначе uiRng_
+    // с фиксированным стартовым значением выдавал бы одинаковый набор рас.
+    if (currentFloor_ == 1) {
+        std::vector<int> all(kRaceCount);
+        for (int i = 0; i < kRaceCount; ++i) all[i] = i;
+        std::random_device rd;
+        std::mt19937 raceRng(rd());
+        std::shuffle(all.begin(), all.end(), raceRng);
+        for (int i = 0; i < 6; ++i) offeredRaces_[i] = all[i];
+        std::fill(racePick_, racePick_ + kPartySize, -1);
+        raceHero_ = 0;
+    }
     std::random_device rd;
     nextSeed_ = rd();
     Rng tmp(nextSeed_);
@@ -687,6 +707,7 @@ void Game::update(float dt) {
             case Screen::Legacy:
             case Screen::Guide:    screen_ = Screen::MainMenu; break;
             case Screen::Pause:    screen_ = prevScreen_; break;
+            case Screen::RaceSelect: screen_ = Screen::Select; break;  // назад к выбору отряда
             case Screen::MainMenu: break;
             default:
                 prevScreen_ = screen_;
@@ -709,6 +730,7 @@ void Game::update(float dt) {
         switch (screen_) {
             case Screen::MainMenu: updateMainMenu(); break;
             case Screen::Select: updateSelect(); break;
+            case Screen::RaceSelect: updateRaceSelect(); break;
             case Screen::Build: updateBuild(); break;
             case Screen::Run: updateRun(dt); break;
             case Screen::Pause: updatePause(); break;
@@ -894,6 +916,71 @@ void Game::updateSettings() {
     }
 }
 
+// Экран выбора расы: по одному герою за раз, дублиamong четырёх запрещены.
+void Game::updateRaceSelect() {
+    const Vector2 m = mouse();
+    const bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+
+    // Какая раса уже занята другим героем (или выбрана текущему).
+    auto takenByOther = [&](int slot) {
+        for (int h = 0; h < kPartySize; ++h)
+            if (h != raceHero_ && racePick_[h] == slot) return true;
+        return false;
+    };
+
+    // Выбор расы: клавиши 1..6 или клик по карточке.
+    const int raceKeys[6] = {KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR, KEY_FIVE, KEY_SIX};
+    for (int k = 0; k < 6; ++k) {
+        const R r = raceCard(k);
+        const bool pressed = IsKeyPressed(raceKeys[k]) || (click && inRect(m, r.x, r.y, r.w, r.h));
+        if (!pressed) continue;
+        if (takenByOther(k)) {
+            setMessage("Эту расу уже выбрал другой герой.", true);
+            continue;
+        }
+        // Повторный клик по своей расе снимает выбор.
+        racePick_[raceHero_] = (racePick_[raceHero_] == k) ? -1 : k;
+        setMessage("", false);
+    }
+
+    // Назад: к предыдущему герою или к выбору отряда.
+    const bool back = IsKeyPressed(KEY_BACKSPACE) || (click && inRect(m, kRaceBackBtn.x, kRaceBackBtn.y,
+                                                                      kRaceBackBtn.w, kRaceBackBtn.h));
+    if (back) {
+        if (raceHero_ > 0) {
+            --raceHero_;
+            setMessage("", false);
+        } else {
+            screen_ = Screen::Select;
+            setMessage("Выбери четырёх героев и босса для похода.", false);
+        }
+        return;
+    }
+
+    // Далее: подтвердить для текущего героя, после четвёртого - начать поход.
+    const bool next = IsKeyPressed(KEY_ENTER) || (click && inRect(m, kRaceNextBtn.x, kRaceNextBtn.y,
+                                                                   kRaceNextBtn.w, kRaceNextBtn.h));
+    if (!next) return;
+    if (racePick_[raceHero_] < 0) {
+        setMessage("Сначала выбери расу для этого героя.", true);
+        return;
+    }
+    if (raceHero_ + 1 < kPartySize) {
+        ++raceHero_;
+        setMessage("", false);
+        return;
+    }
+
+    // Применяем расы к выбранным героям (в порядке карточек отряда).
+    int hero = 0;
+    for (int i = 0; i < kMaxRoster && hero < kPartySize; ++i) {
+        if (!chosen_[i]) continue;
+        setHeroRace(roster_[i], offeredRaces_[racePick_[hero]]);
+        ++hero;
+    }
+    newGame(nextSeed_);
+}
+
 void Game::updateSelect() {
     auto isDefeated = [&](int id) {
         return std::find(defeatedBosses_.begin(), defeatedBosses_.end(), id) != defeatedBosses_.end();
@@ -971,8 +1058,14 @@ void Game::updateSelect() {
     bossId_ = offered_[bossPick_];
     if (IsKeyPressed(KEY_ENTER)) {
         if (chosenCount() == kPartySize) {
-            if (currentFloor_ == 1) newGame(nextSeed_);
-            else nextFloor();
+            if (currentFloor_ == 1) {
+                std::fill(racePick_, racePick_ + kPartySize, -1);
+                raceHero_ = 0;
+                screen_ = Screen::RaceSelect;
+                setMessage("Выбери расу для каждого героя.", false);
+            } else {
+                nextFloor();
+            }
         } else {
             setMessage(fmt("Нужно выбрать ровно %d героя.", kPartySize), true);
         }
@@ -2082,10 +2175,11 @@ void Game::drawGrid(bool buildMode) {
 
 void Game::draw() {
     const bool menuBg = screen_ == Screen::MainMenu || screen_ == Screen::Settings || screen_ == Screen::Achievements ||
-                        screen_ == Screen::Legacy || screen_ == Screen::Guide;
+                        screen_ == Screen::Legacy || screen_ == Screen::Guide || screen_ == Screen::RaceSelect;
     drawBackground(menuBg ? "backgrounds/menu.png" : "backgrounds/game.png", 0.f, 0.f, kScreenW, kScreenH);
     switch (screen_) {
         case Screen::MainMenu: drawMainMenu(); break;
+        case Screen::RaceSelect: drawRaceSelect(); break;
         case Screen::Settings: drawSettings(); break;
         case Screen::Achievements: drawAchievements(); break;
         case Screen::Legacy: drawLegacy(); break;
@@ -2102,6 +2196,7 @@ void Game::draw() {
 void Game::drawScreen(Screen sc) {
     switch (sc) {
         case Screen::Select: drawSelect(); break;
+        case Screen::RaceSelect: drawRaceSelect(); break;
         case Screen::Build: drawBuild(); break;
         case Screen::Run: drawRunView(); break;
         case Screen::Result:
@@ -2182,6 +2277,11 @@ void Game::drawGuide() {
     section("Торговец", "Появляется у края карты, но если его комната не стыкуется с подземельем — входа нет. Строительство стоейкое.");
     section("Инвентарь", "Иконки снаряжения: оружие, броня, реликвия, зелья. Выбор кликом по ячейке; I/Tab - расширенное окно при бое и привале.");
     section("Кузница", "Улучшает оружие, броню и реликвии на один уровень (до 4-го). Зелья не улучшаются; цена скидывается до -20%, пока жив Сейдмард.");
+    section("Расы", "После выбора отряда игроку предлагаются 6 случайных рас (новый набор на каждый забег). Каждый из четырёх героев берёт свою расу (без повторов) и сохраняет её до конца забега.");
+    for (int i = 0; i < kRaceCount; ++i) {
+        const RaceInfo& ri = raceInfo(static_cast<Race>(i));
+        section(ri.name, ri.desc);
+    }
     EndScissorMode();
     // Подстраиваем прокрутку: можно листать до конца контента, но не выше начала.
     const float maxScroll = std::max(0.f, y - (top + 30.f));
@@ -2413,7 +2513,7 @@ void Game::drawBossIntro() {
 void Game::drawSelect() {
     drawText("ВЫБОР ОТРЯДА", kSelX, 20, 32, kAccent);
     if (currentFloor_ == 1) {
-        drawText("Выбери четырёх героев (клик или 1-9, 0, -) и босса (Q/W/E). У Монаха - кнопки стойки на карточке. Enter - начать.",
+        drawText("Выбери четырёх героев (клик или 1-9, 0, -) и босса (Q/W/E). У Монаха - кнопки стойки. Enter - выбрать расы.",
                  kSelX, 60, 16, kDim);
     } else {
         drawText(fmt("ЭТАЖ %d. Выбери следующего босса (Q/W/E). Отряд сохраняется с прошлого этажа.", currentFloor_),
@@ -2499,7 +2599,7 @@ void Game::drawSelect() {
     EndScissorMode();
 
     if (!message_.empty()) drawText(message_, kSelX, 640, 20, messageBad_ ? kBad : kGood);
-    if (chosenCount() == kPartySize) drawText("Enter - начать строительство подземелья", kSelX, 672, 22, kAccent);
+    if (chosenCount() == kPartySize) drawText("Enter - выбрать расы", kSelX, 672, 22, kAccent);
     else drawText(fmt("Нужно выбрать ещё: %d", kPartySize - chosenCount()), kSelX, 672, 20, kDim);
 
     // три предложенных босса: выбери одного (Q / W / E или клик)
@@ -2552,6 +2652,65 @@ void Game::drawSelect() {
 
         DrawRectangle(trackX, thumbY, trackW, thumbH, kAccent);
     }
+}
+
+// -------------------------------------------------------------- выбор расы
+
+void Game::drawRaceSelect() {
+    drawText("ВЫБОР РАСЫ", 190.f, 20.f, 32, kAccent);
+
+    // Список выбранных героев: текущий подсвечивается, выбранные расы видны.
+    int hero = 0;
+    for (int i = 0; i < kMaxRoster && hero < kPartySize; ++i) {
+        if (!chosen_[i]) continue;
+        const Hero& h = roster_[i];
+        const int x = 190 + hero * 260;
+        const bool cur = hero == raceHero_;
+        const bool picked = racePick_[hero] >= 0;
+        DrawRectangle(x, 78, 248, 56, cur ? Color{46, 58, 50, 255} : kPanel);
+        DrawRectangleLines(x, 78, 248, 56, cur ? kGood : picked ? kGridLine : Color{70, 70, 80, 255});
+        drawText(fmt("%d. %s", hero + 1, h.name.c_str()), x + 10.f, 84.f, 16, cur ? kGood : kText);
+        drawText(roleTitle(h.role), x + 10.f, 106.f, 13, kDim);
+        if (picked) {
+            const RaceInfo& ri = raceInfo(static_cast<Race>(offeredRaces_[racePick_[hero]]));
+            // Прижимаем имя расы к правому краю карточки и при необходимости
+            // уменьшаем шрифт, чтобы длинные названия не вылезали за рамку.
+            float fs = 14.f;
+            while (fs > 10.f && textWidth(ri.name, fs) > 120.f) fs -= 1.f;
+            drawText(ri.name, x + 238.f - textWidth(ri.name, fs), 92.f, fs, kGood);
+        }
+        ++hero;
+    }
+
+    drawText(fmt("Герой %d из %d. Выбери расу: 1-6 или клик. Повторная раса недоступна. Backspace - назад.",
+                 raceHero_ + 1, kPartySize), 190.f, 134.f, 15, kDim);
+
+    const Vector2 m = mouse();
+    for (int k = 0; k < 6; ++k) {
+        const R r = raceCard(k);
+        const RaceInfo& ri = raceInfo(static_cast<Race>(offeredRaces_[k]));
+        bool taken = false;
+        for (int h = 0; h < kPartySize; ++h)
+            if (h != raceHero_ && racePick_[h] == k) taken = true;
+        const bool sel = racePick_[raceHero_] == k;
+        const bool hover = inRect(m, r.x, r.y, r.w, r.h);
+        DrawRectangle(r.x, r.y, r.w, r.h, sel ? Color{46, 58, 50, 255} : hover ? Color{40, 42, 54, 255} : kPanel);
+        DrawRectangleLines(r.x, r.y, r.w, r.h, sel ? kGood : taken ? Color{70, 50, 50, 255} : kGridLine);
+        drawText(fmt("[%d] %s", k + 1, ri.name), r.x + 14.f, r.y + 12.f, 20, sel ? kGood : kText);
+        float dy = static_cast<float>(r.y + 46);
+        for (const auto& line : wrap(ri.desc, r.w - 28.f, 13)) {
+            drawText(line, r.x + 14.f, dy, 13, kDim);
+            dy += 17.f;
+        }
+        if (taken) drawText("уже выбрана", r.x + r.w - 120.f, r.y + 12.f, 13, kBad);
+    }
+
+    if (!message_.empty()) drawText(message_, 190.f, 626.f, 18, messageBad_ ? kBad : kGood);
+    drawButton(kRaceBackBtn.x, kRaceBackBtn.y, kRaceBackBtn.w, kRaceBackBtn.h, "Назад",
+               false, true);
+    drawButton(kRaceNextBtn.x, kRaceNextBtn.y, kRaceNextBtn.w, kRaceNextBtn.h,
+               raceHero_ + 1 == kPartySize ? "Начать поход" : "Следующий герой",
+               true, racePick_[raceHero_] >= 0);
 }
 
 // ------------------------------------------------------------- строительство
